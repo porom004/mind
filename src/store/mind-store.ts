@@ -1,5 +1,6 @@
 // ── MindStore interface ──
 
+import type { ExportResult } from '../sync/types';
 import type {
   Space,
   SpaceSummary,
@@ -176,6 +177,9 @@ export interface MindStore {
   clearAllLogs(): number;
   subscribeToLogs(sessionId: string, controller: any, filter?: string): void;
   unsubscribeFromLogs(sessionId: string): void;
+
+  // Sync operations (Phase 1: export only)
+  exportSpaceToFiles(space: string, basePath: string): Promise<ExportResult>;
 
   // Lifecycle
   close(): void;
