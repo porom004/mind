@@ -29,6 +29,8 @@ Example:
 
 ### Added
 
+- Added `mind migrate sessions <project-space> [--dry-run]` to explicitly move legacy `sessions/<repo>` summaries into `projects/<repo>` with deterministic names, provenance, idempotency, and preserved links.
+
 - **`sync serve --detached`** — Background file watcher mode (like `mind serve --detached`) with PID file at `data/mind-sync-watch.pid`
 - **`sync stop`** — Command to stop the detached sync watcher process
 - **`sync init --path <dir>`** — Initialize `.mind/` in a custom directory instead of cwd
@@ -40,6 +42,8 @@ Example:
 - **FileWatcher auto-restart** — If the watcher encounters an error (e.g., directory deleted), it automatically restarts up to 3 times with a 5 second delay between attempts
 
 ### Changed
+
+- Changed checkpoint/session continuity so `checkpoint_done` now creates same-space `session-*` summaries in `projects/<repo>` with tags `type:session` + `cat:summary` at T3, and new automation/protocol guidance no longer writes fresh project summaries to `sessions/<repo>`.
 
 - **Autosync** — Complete rewrite to file-based config (`.mind/config.yml`) instead of SQLite table
   - Config is now versioned with git for team collaboration

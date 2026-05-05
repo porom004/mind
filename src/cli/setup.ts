@@ -376,7 +376,6 @@ case "$EVENT" in
     ;;
   preCompact)
     mind checkpoint set "$PROJECT_SPACE" "Cursor pre-compact" "Snapshot context before compaction" --notes "cursor:event=preCompact" >/dev/null 2>&1 || true
-    mind checkpoint recover "$PROJECT_SPACE" --history >/dev/null 2>&1 || true
     ;;
   stop)
     mind checkpoint set "$PROJECT_SPACE" "Cursor session stop" "Persist final continuity notes" --notes "cursor:event=stop" >/dev/null 2>&1 || true

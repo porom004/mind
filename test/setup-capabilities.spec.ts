@@ -134,7 +134,9 @@ describe('Setup capability model', () => {
     expect(Array.isArray(hooks.stop)).toBe(true);
 
     const hookScriptPath = join(tempHome, '.cursor', 'hooks', 'mind-session-continuity.sh');
-    expect(readFileSync(hookScriptPath, 'utf-8')).toContain('mind checkpoint set');
+    const hookScript = readFileSync(hookScriptPath, 'utf-8');
+    expect(hookScript).toContain('mind checkpoint set');
+    expect(hookScript).not.toContain('--history');
 
     const startMatches = (hooks.sessionStart as Array<Record<string, any>>).filter(
       entry => entry?.command === hookScriptPath

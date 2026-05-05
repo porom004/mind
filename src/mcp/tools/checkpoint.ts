@@ -13,7 +13,7 @@ const CHECKPOINT_TOOL_DESCRIPTIONS: Record<string, string> = {
   checkpoint_save:
     'Save or update a session checkpoint (goal, pending, notes, linked_memories). Creates a recoverable snapshot for context resets or compaction.',
   checkpoint_done:
-    'Complete a checkpoint and transform it into a session memory in sessions/<repo>. The checkpoint is deleted and a session memory is created.',
+    'Complete a checkpoint and transform it into a same-space `session-*` T3 summary memory in projects/<repo>. The checkpoint is deleted after the summary is created.',
   checkpoint_load:
     'Restore a specific checkpoint by name. Returns checkpoint state and linked_memories in enriched format.',
   checkpoint_query:

@@ -64,10 +64,10 @@ Before creating a new tag, query existing memories first: `memory_query { space:
 Organize memories into hierarchical spaces:
 
 - `projects/<REPO_NAME>` — one space per project (use actual repo/directory name)
+- session summaries stay in `projects/<REPO_NAME>` as `session-*` memories tagged `type:session` + `cat:summary` at T3
 - `user/preferences` — global user preferences
 - `user/patterns` — work patterns and conventions
 - `global/config` — cross-project configuration
-- `sessions/<REPO_NAME>` — session summaries
 
 ---
 
@@ -152,7 +152,7 @@ For list tools (`memory_query`):
 2. **Work**: Add memories as you go with `memory_add` — include tags and `links_to`
 3. **Query**: Find context with `memory_query { search: "<keywords>" }`
 4. **Checkpoint**: Save progress with `checkpoint_save`
-5. **Close**: `checkpoint_done` — transforms checkpoint to session memory in `sessions/<REPO_NAME>` and deletes the checkpoint
+5. **Close**: `checkpoint_done` — transforms the checkpoint into a same-space `session-*` T3 summary in `projects/<REPO_NAME>` and deletes the checkpoint
 
 ---
 
@@ -191,10 +191,11 @@ memory_query { space: "projects/mind", search: "authentication" }
 
 // 6. Session end: summarize
 memory_add {
-  space: "sessions/mind",
+  space: "projects/mind",
   name: "session-2026-03-07",
   content: "## Goal: ...\n## Accomplished: ...\n## Decisions: ...",
   tags: ["type:session", "cat:summary"],
+  tier: 3,
   links_to: ["projects/mind:JWT over sessions for auth"]
 }
 ```

@@ -26,8 +26,9 @@ Feature: MCP Checkpoint Tools
       And memories "mem1" and "mem2" exist in "projects/test"
       And the checkpoint has linked_memories ["mem1", "mem2"]
       When calling checkpoint_done with space "projects/test" checkpointName "current" summary "Completed login"
-      Then a new memory is created in "sessions/test"
+      Then a new memory is created in "projects/test"
       And the memory has tags ["type:session", "cat:summary"]
+      And the memory defaults to tier 3
       And the memory content includes "Complete API refactor"
       And the memory has linked references to "mem1" and "mem2"
       And the original checkpoint is deleted from "projects/test"

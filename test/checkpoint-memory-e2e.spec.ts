@@ -26,7 +26,7 @@ describe('Phase 6: Integration Tests — Complete Workflows', () => {
   // ==========================================================================
   // Test 1: Complete session workflow
   // ==========================================================================
-  test('complete session workflow: create checkpoint → work → checkpoint_done → session memory created', async () => {
+  test('complete session workflow: create checkpoint → work → checkpoint_done → same-space session memory created', async () => {
     const checkpointTools = createCheckpointTools(store);
     const memoryTools = createMemoryTools(store);
 
@@ -82,17 +82,22 @@ describe('Phase 6: Integration Tests — Complete Workflows', () => {
       summary: 'Auth implementation complete with JWT and refresh tokens',
     });
 
-    // 5. Verify session memory exists in sessions/<repo>
+    // 5. Verify session memory exists in the project space
     expect(done.session_memory).toBeDefined();
-    expect(done.session_memory!.space).toBe('sessions/test-repo');
+    expect(done.session_memory!.space).toBe('projects/test-repo');
     expect(done.session_memory!.tags).toContain('type:session');
     expect(done.session_memory!.tags).toContain('cat:summary');
 
-    const sessionMem = store.getMemory('sessions/test-repo', done.session_memory!.name);
+    const sessionMem = store.getMemory('projects/test-repo', done.session_memory!.name);
     expect(sessionMem).toBeDefined();
+    expect(sessionMem!.tier).toBe(3);
     const content = JSON.parse(sessionMem!.content);
     expect(content.goal).toBe('Implement user auth');
     expect(content.whatWasDone).toBe('Auth implementation complete with JWT and refresh tokens');
+    expect(content.sessionSummary.schema).toBe('mind.session-summary/v1');
+    expect(content.sessionSummary.writer.id).toBe('checkpoint_done');
+    expect(content.sessionSummary.provenance.checkpoint.space).toBe('projects/test-repo');
+    expect(content.sessionSummary.provenance.checkpoint.name).toBe(checkpointName);
 
     // 6. Verify original checkpoint was deleted
     expect(store.getMemory('projects/test-repo', checkpointName)).toBeNull();
@@ -446,7 +451,7 @@ describe('Phase 6: Integration Tests — Complete Workflows', () => {
     });
 
     // Session memory should have link to the related memory
-    const sessionMem = store.getMemory('sessions/test-repo', done.session_memory!.name);
+    const sessionMem = store.getMemory('projects/test-repo', done.session_memory!.name);
     expect(sessionMem).toBeDefined();
     const sessionLinks = store.getLinks(sessionMem!.id);
 

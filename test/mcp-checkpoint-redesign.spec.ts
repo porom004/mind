@@ -340,7 +340,7 @@ describe('Phase 2.5: Checkpoint Tools (same space)', () => {
   // checkpoint_done — Phase 2: Option B (transform to session memory)
   // ==========================================================================
   describe('checkpoint.done (Phase 2: Option B)', () => {
-    test('2.5.4 checkpoint_done transforms checkpoint into session memory in sessions/<repo>', async () => {
+    test('2.5.4 checkpoint_done transforms checkpoint into a T3 session memory in the same space', async () => {
       const tools = createCheckpointTools(store);
 
       // Create a checkpoint
@@ -358,7 +358,7 @@ describe('Phase 2.5: Checkpoint Tools (same space)', () => {
 
       // Phase 2: Response should contain session_memory info
       expect(res.session_memory).toBeDefined();
-      expect(res.session_memory?.space).toBe('sessions/test-space');
+      expect(res.session_memory?.space).toBe('test-space');
       expect(res.session_memory?.name).toContain('session-');
       expect(res.session_memory?.tags).toContain('type:session');
       expect(res.session_memory?.tags).toContain('cat:summary');
@@ -366,9 +366,10 @@ describe('Phase 2.5: Checkpoint Tools (same space)', () => {
       // Original checkpoint should be deleted
       expect(store.getMemory('test-space', checkpointName)).toBeNull();
 
-      // Session memory should exist in sessions space
-      const sessionMem = store.getMemory('sessions/test-space', res.session_memory!.name);
+      // Session memory should exist in the original project space
+      const sessionMem = store.getMemory('test-space', res.session_memory!.name);
       expect(sessionMem).toBeDefined();
+      expect(sessionMem?.tier).toBe(3);
       expect(sessionMem?.tags).toContain('type:session');
       expect(sessionMem?.tags).toContain('cat:summary');
     });
@@ -393,9 +394,10 @@ describe('Phase 2.5: Checkpoint Tools (same space)', () => {
         summary: 'Feature X is done',
       });
 
-      // Session memory should exist in sessions space
-      const sessionMem = store.getMemory('sessions/test-space', res.session_memory!.name);
+      // Session memory should exist in the original project space
+      const sessionMem = store.getMemory('test-space', res.session_memory!.name);
       expect(sessionMem).toBeDefined();
+      expect(sessionMem?.tier).toBe(3);
 
       // Content should include checkpoint data plus summary
       const content = JSON.parse(sessionMem!.content);
@@ -432,7 +434,7 @@ describe('Phase 2.5: Checkpoint Tools (same space)', () => {
       ).rejects.toThrow('No active checkpoint found');
     });
 
-    test('2.5.4d checkpoint_done auto-creates sessions space if not exists', async () => {
+    test('2.5.4d checkpoint_done does not auto-create a legacy sessions space', async () => {
       const tools = createCheckpointTools(store);
 
       // Ensure sessions space doesn't exist
@@ -450,9 +452,9 @@ describe('Phase 2.5: Checkpoint Tools (same space)', () => {
         summary: 'Done',
       });
 
-      // Sessions space should be auto-created
-      expect(store.getSpace('sessions/test-space')).toBeDefined();
-      expect(res.session_memory?.space).toBe('sessions/test-space');
+      // Legacy sessions space should remain absent
+      expect(store.getSpace('sessions/test-space')).toBeNull();
+      expect(res.session_memory?.space).toBe('test-space');
     });
   });
 

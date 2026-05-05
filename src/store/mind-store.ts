@@ -71,6 +71,10 @@ export interface MindStore {
    */
   getHotMemories(space: string): HotMemorySummary[];
   updateMemory(id: number, updates: { name?: string; content?: string }): Promise<void>;
+  moveMemory(
+    id: number,
+    updates: { space: string; name?: string; content?: string; tier?: Tier }
+  ): Promise<Memory>;
   deleteMemory(id: number): void;
   deleteMemoryByName(space: string, name: string): void;
   /**

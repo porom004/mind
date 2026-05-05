@@ -26,6 +26,10 @@ export interface MemoryRepository {
   getHotMemories(space: string): HotMemorySummary[];
   resolveMemoryRef(ref: string): { space: string; name: string } | null;
   updateMemory(id: number, updates: { name?: string; content?: string }): Promise<void>;
+  moveMemory(
+    id: number,
+    updates: { space: string; name?: string; content?: string; tier?: Tier }
+  ): Promise<Memory>;
   deleteMemory(id: number): void;
   deleteMemoryByName(space: string, name: string): void;
   recordAccess(id: number): void;
@@ -354,6 +358,64 @@ export function createMemoryRepository(
     }
   }
 
+  async function moveMemory(
+    id: number,
+    updates: { space: string; name?: string; content?: string; tier?: Tier }
+  ): Promise<Memory> {
+    const row = requireMemory(db, id);
+    const nextSpace = updates.space;
+    const nextName = updates.name ?? row.name;
+    const nextContent = updates.content ?? row.content;
+    const nextTier = updates.tier ?? row.tier;
+
+    const targetSpace = db.query('SELECT 1 FROM spaces WHERE name = ?').get(nextSpace);
+    if (!targetSpace) {
+      throw new Error(
+        `Space "${nextSpace}" does not exist. Create it first with space_create tool.`
+      );
+    }
+
+    const existing = db
+      .query('SELECT id FROM memories WHERE space_name = ? AND name = ? AND id != ?')
+      .get(nextSpace, nextName, id) as { id: number } | null;
+    if (existing) {
+      throw new Error(`Memory "${nextName}" already exists in space "${nextSpace}"`);
+    }
+
+    const moveTransaction = db.transaction(() => {
+      if ((nextSpace !== row.space_name || nextTier !== row.tier) && nextTier < 3) {
+        ensureCapacity(nextSpace, nextTier, true);
+      }
+
+      const ts = now();
+      db.run(
+        `UPDATE memories
+            SET space_name = ?, name = ?, content = ?, tier = ?, updated_at = ?, changed_at = ?
+          WHERE id = ?`,
+        [nextSpace, nextName, nextContent, nextTier, ts, ts, id]
+      );
+
+      if (nextName !== row.name || nextContent !== row.content) {
+        fts.update(id, nextName, nextContent);
+      }
+    });
+
+    moveTransaction();
+
+    if (isRagEnabled() && (nextName !== row.name || nextContent !== row.content)) {
+      const memory = rowToMemory(
+        db,
+        db.query('SELECT * FROM memories WHERE id = ?').get(id) as any
+      );
+      const embedding = await getEmbedding(`${memory.name} ${memory.content}`);
+      if (embedding) {
+        db.run('UPDATE memories SET embedding = ? WHERE id = ?', [vectorToBlob(embedding), id]);
+      }
+    }
+
+    return rowToMemory(db, db.query('SELECT * FROM memories WHERE id = ?').get(id) as any);
+  }
+
   function deleteMemory(id: number): void {
     requireMemory(db, id);
     fts.delete(id);
@@ -651,6 +713,7 @@ export function createMemoryRepository(
     getHotMemories,
     resolveMemoryRef,
     updateMemory,
+    moveMemory,
     deleteMemory,
     deleteMemoryByName,
     recordAccess,

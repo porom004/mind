@@ -162,6 +162,16 @@ describe('OpenCode setup integration', () => {
     expect(pluginText).toContain('experimental.session.compacting');
     expect(pluginText).toContain('checkpoint set');
     expect(pluginText).toContain('checkpoint recover');
+    expect(pluginText).not.toContain('--history');
+    expect(pluginText).toContain('--name <checkpoint-name>');
+    expect(pluginText).not.toContain('sessions/');
+    expect(pluginText).toContain('type:session,cat:summary');
+    expect(pluginText).toContain('--tier');
+    expect(pluginText).toContain("'3'");
+    expect(pluginText).toContain('mind.session-summary/v1');
+    expect(pluginText).toContain('sessionSummary');
+    expect(pluginText).toContain('writer');
+    expect(pluginText).toContain('provenance');
   });
 
   test('plugin exports experimental.chat.system.transform handler', async () => {

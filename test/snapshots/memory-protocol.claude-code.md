@@ -34,7 +34,7 @@ memory_add {
 ## MANDATORY: Session End
 
 1. `checkpoint_done { space: "projects/<repo-name>", summary: "..." }`
-   → Auto-creates the session memory in sessions/<repo-name> and deletes the checkpoint
+   → Auto-creates a same-space `session-*` memory in `projects/<repo-name>` with tags `type:session` + `cat:summary`, default tier T3, then deletes the checkpoint
 2. (optional) `memory_update` to enrich the session memory if needed
 
 ## Checkpoint Aging

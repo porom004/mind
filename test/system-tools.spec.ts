@@ -49,7 +49,7 @@ describe('MCP System Tools', () => {
     const response = await tool.handler();
     expect(response).toEqual({
       content: [{ type: 'text', text: renderSystemInstructions() }],
-      instructions_version: '1.2.0',
+      instructions_version: '1.3.0',
     });
   });
 
@@ -59,7 +59,7 @@ describe('MCP System Tools', () => {
     const response = await tools.system_instructions.handler();
     const sourceText = readFileSync(SYSTEM_INSTRUCTIONS_SOURCE_PATH, 'utf-8');
 
-    expect(response.instructions_version).toBe('1.2.0');
+    expect(response.instructions_version).toBe('1.3.0');
     expect(response.content[0]?.type).toBe('text');
     expect(response.content[0]?.text).toBe(sourceText);
   });

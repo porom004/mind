@@ -72,7 +72,10 @@ checkpoint_done {
 }
 ```
 
-`checkpoint_done` automatically creates a session memory in `sessions/<repo>` and deletes the checkpoint. Optionally, you may enrich it with `memory_update` after if more detail is needed.
+`checkpoint_done` automatically creates a same-space `session-*` memory in
+`projects/<repo>` with tags `type:session` + `cat:summary`, default tier T3,
+and deletes the checkpoint. Optionally, you may enrich it with
+`memory_update` after if more detail is needed.
 
 ---
 
@@ -189,7 +192,7 @@ checkpoint_done {
 }
 ```
 
-`checkpoint_done` transforms the checkpoint into a session memory in `sessions/<repo>` and deletes the checkpoint.
+`checkpoint_done` transforms the checkpoint into a same-space `session-*` summary in `projects/<repo>` and deletes the checkpoint.
 
 ---
 
@@ -212,26 +215,26 @@ checkpoint_done {
 
 ## Tool Quick Reference
 
-| Tool                  | Purpose                                                                               |
-| --------------------- | ------------------------------------------------------------------------------------- |
-| `space_create`        | Create space (required before adding memories). Tags required.                        |
-| `space_get`           | Get space details + hot memories preview                                              |
-| `space_list`          | List spaces, optionally by tag                                                        |
-| `space_update`        | Update description and/or tags                                                        |
-| `space_delete`        | Delete space + all contents permanently                                               |
-| `memory_add`          | Add memory with tags. `links_to` is best-effort — check `links_failed` in response.   |
-| `memory_read`         | Read + auto-promote. Use `noPromote:true` for read without side effects.              |
-| `memory_update`       | Update name, content, or replace tags                                                 |
-| `memory_delete`       | Delete memory + all its links                                                         |
-| `memory_query`        | Query by metadata. Use `search` parameter for full-text search.                       |
-| `status`              | Storage stats (counts per tier, links, spaces)                                        |
-| `link_create`         | Link two memories by `space:name` ref                                                 |
-| `link_delete`         | Remove a link between two memories                                                    |
-| `checkpoint_save`     | Save/update session state (goal, pending, notes)                                      |
-| `checkpoint_load`     | Restore a specific checkpoint by name (use checkpoint_query first)                    |
-| `checkpoint_done`     | Transform checkpoint to session memory in `sessions/<repo>` and delete the checkpoint |
-| `checkpoint_query`    | Query checkpoints with filters: status, date range, tag, limit/offset                 |
-| `system_instructions` | Get full protocol documentation                                                       |
+| Tool                  | Purpose                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `space_create`        | Create space (required before adding memories). Tags required.                                               |
+| `space_get`           | Get space details + hot memories preview                                                                     |
+| `space_list`          | List spaces, optionally by tag                                                                               |
+| `space_update`        | Update description and/or tags                                                                               |
+| `space_delete`        | Delete space + all contents permanently                                                                      |
+| `memory_add`          | Add memory with tags. `links_to` is best-effort — check `links_failed` in response.                          |
+| `memory_read`         | Read + auto-promote. Use `noPromote:true` for read without side effects.                                     |
+| `memory_update`       | Update name, content, or replace tags                                                                        |
+| `memory_delete`       | Delete memory + all its links                                                                                |
+| `memory_query`        | Query by metadata. Use `search` parameter for full-text search.                                              |
+| `status`              | Storage stats (counts per tier, links, spaces)                                                               |
+| `link_create`         | Link two memories by `space:name` ref                                                                        |
+| `link_delete`         | Remove a link between two memories                                                                           |
+| `checkpoint_save`     | Save/update session state (goal, pending, notes)                                                             |
+| `checkpoint_load`     | Restore a specific checkpoint by name (use checkpoint_query first)                                           |
+| `checkpoint_done`     | Transform checkpoint to same-space `session-*` summary memory in `projects/<repo>` and delete the checkpoint |
+| `checkpoint_query`    | Query checkpoints with filters: status, date range, tag, limit/offset                                        |
+| `system_instructions` | Get full protocol documentation                                                                              |
 
 ---
 

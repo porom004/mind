@@ -283,9 +283,10 @@ Reads `data/brain.json` (or `$MIND_DATA_DIR/brain.json`) and imports all spaces 
 | Status (space)      | `status`              | —                                           | `<space>`                      | —                                                                     | Show tier breakdown for a specific space.                                                                                                                         |
 | List tags           | `tags`                | `tgs`                                       | —                              | `--spaces`, `--memories`                                              | List all tags in the system (defaults to both).                                                                                                                   |
 | Checkpoint set      | `checkpoint set`      | `cp set`                                    | `<space>` `<goal>` `<pending>` | `--notes`, `--linked-memories`                                        | Create or update an active checkpoint in the project space.                                                                                                       |
-| Checkpoint complete | `checkpoint complete` | `cp complete`, `checkpoint done`, `cp done` | `<space>` `<name>` `<what>`    | —                                                                     | Complete a checkpoint and transform it into a session memory in sessions/<repo>. The checkpoint is deleted and a session memory is created.                       |
-| Checkpoint recover  | `checkpoint recover`  | `cp recover`                                | `<space>`                      | `--format`, `--name`                                                  | Recover checkpoint by name (use `checkpoint list` first to find available checkpoints; output `text\|md\|json`).                                                  |
+| Checkpoint complete | `checkpoint complete` | `cp complete`, `checkpoint done`, `cp done` | `<space>` `<name>` `<what>`    | —                                                                     | Complete a checkpoint and transform it into a same-space `session-*` T3 summary in `projects/<repo>`. The checkpoint is deleted after the summary is created.     |
+| Checkpoint recover  | `checkpoint recover`  | `cp recover`                                | `<space>`                      | `--name`                                                              | Recover checkpoint by name (use `checkpoint list` first to find available checkpoints; output is JSON).                                                           |
 | Checkpoint list     | `checkpoint list`     | `cp list`                                   | `<space>`                      | `--status`                                                            | List checkpoints from the project space (filtered by `checkpoint` tag).                                                                                           |
+| Session migration   | `migrate sessions`    | —                                           | `<space>`                      | `--dry-run`                                                           | Explicitly migrate legacy `sessions/<repo>` summaries into `projects/<repo>` with deterministic naming and preserved links.                                       |
 | Guide               | `guide`               | `g`                                         | —                              | —                                                                     | Show usage guide (human mode).                                                                                                                                    |
 | Guide (mode)        | `guide`               | `g`                                         | `<mode>`                       | —                                                                     | Show guide (`agent` or `human`).                                                                                                                                  |
 | Import              | `import`              | —                                           | —                              | —                                                                     | Import legacy `brain.json` into SQLite.                                                                                                                           |
@@ -347,7 +348,7 @@ The MCP server exposes 18 tools for agent integration:
 | `checkpoint_save`  | Create or update a checkpoint (goal, pending, notes, linked_memories).                                              |
 | `checkpoint_load`  | Restore a specific checkpoint by name. Returns full checkpoint text plus all linked_memories in memory_read format. |
 | `checkpoint_query` | Query checkpoints with filters: status, date range, tag, limit/offset, plus explicit soft-error reporting.          |
-| `checkpoint_done`  | Transform checkpoint to session memory in `sessions/<repo>` and delete the checkpoint                               |
+| `checkpoint_done`  | Transform checkpoint to a same-space `session-*` T3 summary memory in `projects/<repo>` and delete the checkpoint   |
 
 #### System (2 tools)
 
@@ -381,10 +382,10 @@ When using mind via MCP, follow these conventions:
 > For software projects, use the repository/directory name as the space name (e.g., `projects/mind`, `projects/arcana-web`). This makes memories discoverable by future agents.
 
 - `projects/<name>` — one space per project
+- same-space session summaries live inside `projects/<name>` as `session-*` memories tagged `type:session` + `cat:summary` at T3
 - `user/preferences` — global user preferences
 - `user/patterns` — user patterns
 - `global/config` — cross-project config
-- `sessions/<project>` — session summaries
 
 **Tier usage:**
 

@@ -1,6 +1,8 @@
 // Extracted from setup.ts - OpenCode prudent automation plugin builder
 // This is the embedded JavaScript string for OpenCode's experimental plugin system
 
+import { OFFICIAL_SESSION_SUMMARY_SCHEMA } from '../helpers/session-summary';
+
 export function buildOpenCodeAutomationPlugin(mindPath: string): string {
   const resolvedMindPath = JSON.stringify(mindPath);
 
@@ -20,6 +22,7 @@ const MAX_CONTEXT_CHARS = 1600;
 const MAX_NOTES_CHARS = 800;
 const MIN_CHECKPOINT_INTERVAL_MS = 90_000;
 const MIN_SUMMARY_INTERVAL_MS = 240_000;
+const SESSION_SUMMARY_SCHEMA = ${JSON.stringify(OFFICIAL_SESSION_SUMMARY_SCHEMA)};
 const RECOVERY_TEXT = ${JSON.stringify(RECOVERY_TEXT)};
 
 function safeJsonParse(value, fallback) {
@@ -32,6 +35,10 @@ function safeJsonParse(value, fallback) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function nowSqlTimestamp() {
+  return nowIso().replace('T', ' ').replace('Z', '').split('.')[0];
 }
 
 function clampText(value, maxChars) {
@@ -81,8 +88,8 @@ function getProjectSpace(ctx) {
   return 'projects/' + buildProjectName(ctx);
 }
 
-function getSessionSpace(ctx) {
-  return 'sessions/' + buildProjectName(ctx);
+function buildSessionSummaryName(sessionId) {
+  return 'session-' + nowIso().replace(/[:.]/g, '-') + '-' + sanitizeSegment(sessionId);
 }
 
 function getStatePath() {
@@ -195,19 +202,42 @@ function buildEventNotes(ctx, payload, extra) {
 }
 
 function recoverCheckpointContext(projectSpace) {
-  const recovered = runMindCommand(['checkpoint', 'recover', projectSpace, '--history']);
-  if (!recovered.ok) {
-    return null;
-  }
+  void projectSpace;
+  return null;
+}
 
-  const text = clampText(recovered.stdout, MAX_CONTEXT_CHARS);
-  return text.length > 0 ? text : null;
+function buildSessionSummaryContent(projectSpace, payload, summary) {
+  const timestamp = nowSqlTimestamp();
+  return JSON.stringify(
+    {
+      goal: '',
+      pending: '',
+      notes: summary,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      whatWasDone: summary,
+      completedAt: timestamp,
+      sessionSummary: {
+        schema: SESSION_SUMMARY_SCHEMA,
+        writer: {
+          id: 'opencode_automation_plugin',
+        },
+        provenance: {
+          projectSpace,
+          sessionId: extractSessionId(payload),
+          eventType: String(payload?.type ?? 'unknown'),
+        },
+      },
+    },
+    null,
+    2
+  );
 }
 
 function persistSessionSummary(ctx, payload, summary, state) {
-  const sessionSpace = getSessionSpace(ctx);
+  const projectSpace = getProjectSpace(ctx);
   const sessionId = extractSessionId(payload);
-  const dedupeKey = sessionSpace + ':' + sessionId;
+  const dedupeKey = projectSpace + ':' + sessionId;
   if (!hasIntervalPassed(state.summaries, dedupeKey, MIN_SUMMARY_INTERVAL_MS)) {
     return;
   }
@@ -217,16 +247,17 @@ function persistSessionSummary(ctx, payload, summary, state) {
     return;
   }
 
-  runMindCommand(['create', sessionSpace, 'Session summaries managed by OpenCode prudent automation']);
-
-  const memoryName = 'summary-' + sanitizeSegment(sessionId) + '-' + Date.now();
+  const memoryName = buildSessionSummaryName(sessionId);
+  const memoryContent = buildSessionSummaryContent(projectSpace, payload, safeSummary);
   runMindCommand([
     'add',
-    sessionSpace,
+    projectSpace,
     memoryName,
-    safeSummary,
+    memoryContent,
     '--tags',
-    'type:session,cat:discovery',
+    'type:session,cat:summary',
+    '--tier',
+    '3',
   ]);
 }
 
@@ -289,7 +320,7 @@ export const MindAutomationPlugin = async (ctx) => {
           output.context.push(
             '## mind Prudent Continuity',
             '- Before compaction: key context was checkpointed using mind checkpoint set.',
-            '- After compaction: recover with \`checkpoint recover <project-space> --history\` if needed.',
+            '- After compaction: use \`checkpoint list <project-space> --status active\` and then \`checkpoint recover <project-space> --name <checkpoint-name>\` if needed.',
             escaped ? '\\nRecovered context snapshot:\\n' + escaped : '\\nRecovered context snapshot unavailable; follow manual mind protocol.'
           );
         }

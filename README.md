@@ -191,6 +191,7 @@ mind read <space> <name>
 mind checkpoint set <space> "goal" "pending"
 mind checkpoint recover <space> --name <checkpoint-name>
 mind checkpoint complete <space> <name> "what was done"
+mind migrate sessions projects/<repo> --dry-run
 mind checkpoint list <space> --status active
 mind search "query"
 mind query --space <space> --from 2026-01-01 --to 2026-12-31 --limit 20 --offset 0
@@ -370,6 +371,8 @@ Checkpoint MCP tools are also available for session continuity:
 - `checkpoint_done`
 - `checkpoint_load`
 - `checkpoint_query`
+
+`checkpoint_done` now closes a live checkpoint into a same-space `session-*` summary memory in `projects/<repo>` with tags `type:session` + `cat:summary` at T3. Legacy `sessions/<repo>` content can be explicitly migrated with `mind migrate sessions <project-space> [--dry-run]`.
 
 `checkpoint_load` requires `checkpointName` (use `checkpoint_query` first to find available checkpoints). It returns full checkpoint text fields plus all linked_memories in enriched format, and checkpoint MCP payloads use `changed_at` instead of `created_at` / `updated_at`.
 
