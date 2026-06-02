@@ -569,7 +569,7 @@ make test-rag
 
 ## Maintainers: Releases
 
-Release management is handled via `Makefile`:
+Release management is handled via `Makefile` and `scripts/release.sh`:
 
 ```bash
 make help
@@ -577,9 +577,13 @@ make release-patch
 make release-minor
 make release-major
 make release-simulate TYPE=patch
+./scripts/release.sh minor --notes-file docs/release-notes/v1.5.0.md
 ```
 
-`release-simulate` runs a full release simulation without changing files, creating tags, or publishing a release.
+`release-simulate` runs a full release simulation without changing files, creating
+tags, or publishing a release. Real releases must run from `main`. Use
+`--notes-file <path>` when you want curated GitHub release notes; omit it to use
+GitHub's generated release notes fallback.
 
 ## Contributing
 

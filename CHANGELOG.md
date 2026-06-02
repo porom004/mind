@@ -23,67 +23,39 @@ Guidelines:
 
 Example:
 
-- `Added \\`mind update --check\\` to verify available releases without installing.`
+- `Added \`mind update --check\` to verify available releases without installing.`
 
 ## [Unreleased]
 
 ### Added
 
-- Added automatic DB-to-filesystem autosync for enabled spaces, so CLI, API/web,
-  and MCP mutations export updated `.mind/spaces/<hash>/` files without blocking
-  the primary DB operation on normal sync conflicts or export warnings.
-- Added manifest v2 baseline tracking for autosync exports, including canonical
-  content and metadata hashes, normalized UTC timestamps, managed-file ownership,
-  collision-safe filenames, and DB-origin lock files for loop prevention.
-- Added detailed autosync status diagnostics for DB/file/manifest drift,
-  conflicts, tombstones, missing managed files, and latest auto-export warnings.
-- Added `mind setup refresh` to refresh detected mind-managed integrations with `--dry-run`, `--all`, and `--agent` controls.
-- Added `mind migrate sessions <project-space> [--dry-run]` to explicitly move legacy `sessions/<repo>` summaries into `projects/<repo>` with deterministic names, provenance, idempotency, and preserved links.
-
-- **`sync serve --detached`** — Background file watcher mode (like `mind serve --detached`) with PID file at `data/mind-sync-watch.pid`
-- **`sync stop`** — Command to stop the detached sync watcher process
-- **`sync init --path <dir>`** — Initialize `.mind/` in a custom directory instead of cwd
-- **`sync enable --path <dir>`**, **`sync now --path <dir>`**, **`sync export --path <dir>`**, **`sync import --path <dir>`** — Custom `.mind/` path override via `--path` flag
-- **`links_to` import** — When importing markdown files, links from frontmatter are now created as actual links in the DB (cross-space refs like `projects/other:memory-name` are supported; missing targets are logged as warnings)
-- **`sync status --space <name>`** — Detailed stats view showing enabled status, watcher status (running/stopped), memory count, sync file count, conflict strategy, and path
-- **`MIND_SYNC_ROOT` env var** — MCP server respects this env var to find `.mind/` when running from a different directory than the project
-- **`mind mcp --sync-root <path>`** — MCP server accepts `projectRoot` parameter in both `startMcpServer()` and `startMcpHttpServer()` for explicit project root override
-- **FileWatcher auto-restart** — If the watcher encounters an error (e.g., directory deleted), it automatically restarts up to 3 times with a 5 second delay between attempts
+- Added autosync commands that mirror spaces into versioned `.mind/` files,
+  making project memories easier to review, share, and recover.
+- Added `mind setup refresh` so existing agent integrations can stay aligned
+  after updates without recreating unrelated configs.
+- Added `mind migrate sessions <project-space> [--dry-run]` to move older
+  `sessions/<repo>` summaries into the project space with preserved links.
+- Added maintainer release automation support for curated GitHub release notes
+  with `--notes-file <path>` and package-lock version alignment.
 
 ### Changed
 
-- Changed autosync conflict detection to compare DB and file hashes against a
-  shared manifest baseline instead of treating file existence or timestamp drift
-  as a conflict. Timestamps remain available for audit and `latest-wins`
-  tie-breaking.
-- Changed autosync file-to-DB imports to update existing-memory content, tags,
-  tier, pinned state, and best-effort `links_to` when the conflict strategy
-  chooses the file side, while leaving frontmatter renames unsupported.
-- Changed `latest-wins` timestamp handling to accept near-future clock skew and
-  report far-future timestamps as unsafe skip reasons instead of generic invalid
-  timestamps or blind overwrites.
-- Changed automatic SQLite migrations to create a verified backup before outdated
-  DB upgrades, validate the migrated DB, restore automatically on migration
-  failure, and retain the last three automatic migration backups per DB path.
-- Changed `mind update` to run the newly installed `mind status` after the
-  installer when an existing DB was present, so post-update migrations happen
-  before integration refresh and fail the update on migration/restore errors.
-- Changed `mind update` to refresh detected integrations after successful installs by default, with `--no-refresh-integrations` as an opt-out.
-- Changed checkpoint/session continuity so `checkpoint_done` now creates same-space `session-*` summaries in `projects/<repo>` with tags `type:session` + `cat:summary` at T3, and new automation/protocol guidance no longer writes fresh project summaries to `sessions/<repo>`.
-- Changed mind protocol guidance to separate checkpoints, session summaries, durable memories, and living references, reducing low-value durable memory writes while documenting cautious deletion and convention-only `status:*` tags.
-- Changed mind protocol wording to clarify checkpoint-driven session summaries, authoritative living-reference tags, readable reference memory names, and compact `links_to` follow-up guidance.
+- Changed database migrations to create verified backups, restore automatically
+  on migration failures, and keep the latest automatic backups.
+- Changed `mind update` to validate migrations before refreshing integrations,
+  reducing the chance of an update leaving agents on stale protocol files.
+- Changed session summaries to live in `projects/<repo>` as same-space
+  `session-*` memories. If you have older summaries under `sessions/<repo>`,
+  run `mind setup` after `mind update`, then run
+  `mind migrate sessions projects/<repo> --dry-run` first and
+  `mind migrate sessions projects/<repo>` after you review the dry run.
 
 ### Fixed
 
-- Fixed the installer-generated launcher to run the installed `src/mind.ts` entrypoint instead of the stale `cli/src/mind.ts` path.
-- Fixed mind protocol wording to use runtime-neutral validation language and avoid orchestration-specific report fields.
-
-- **Autosync** — Complete rewrite to file-based config (`.mind/config.yml`) instead of SQLite table
-  - Config is now versioned with git for team collaboration
-  - Spaces stored in `.mind/spaces/<hash>/` directories
-  - Hash = SHA256 truncated to 8 hex chars
-  - CLI commands: `sync init`, `sync status`, `sync enable`, `sync disable`, `sync now`, `sync export`, `sync import`, `sync conflict`, `sync remove`, `sync config`, `sync serve`
-  - MCP server auto-starts watchers for all enabled spaces
+- Fixed the public installer launcher so new installs run the current
+  `src/mind.ts` entry point.
+- Fixed protocol wording and update flows that could confuse agent workflows
+  during setup, migration, or session recovery.
 
 ## [1.4.0] - 2026-04-10
 

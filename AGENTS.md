@@ -245,6 +245,7 @@ make release-patch
 make release-minor
 make release-major
 make release-simulate TYPE=patch
+./scripts/release.sh minor --notes-file docs/release-notes/v1.5.0.md
 ```
 
 ### 4.7 Migrating from legacy brain.json
@@ -500,6 +501,7 @@ spaces:
 
 - Every non-trivial change (features, behavior changes, architecture changes, bug fixes) must be added to `CHANGELOG.md` under `## [Unreleased]`.
 - Release commands (`make release-patch`, `make release-minor`, `make release-major`) require unreleased changelog entries and promote `Unreleased` to a versioned section.
+- Use `./scripts/release.sh <patch|minor|major> --notes-file <path>` for curated GitHub release notes; omit `--notes-file` to use GitHub generated notes.
 - `make release-simulate TYPE=patch|minor|major` must show what would happen without modifying files/tags/releases.
 
 - **Changes to the `mind` script or completion:** Update [§ 1](#1-project-overview), [§ 2.1](#21-high-level-flow), [§ 2.2](#22-main-modules-and-responsibilities), and [§ 4.2](#42-running-the-cli).
