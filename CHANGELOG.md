@@ -29,6 +29,15 @@ Example:
 
 ### Added
 
+- Added automatic DB-to-filesystem autosync for enabled spaces, so CLI, API/web,
+  and MCP mutations export updated `.mind/spaces/<hash>/` files without blocking
+  the primary DB operation on normal sync conflicts or export warnings.
+- Added manifest v2 baseline tracking for autosync exports, including canonical
+  content and metadata hashes, normalized UTC timestamps, managed-file ownership,
+  collision-safe filenames, and DB-origin lock files for loop prevention.
+- Added detailed autosync status diagnostics for DB/file/manifest drift,
+  conflicts, tombstones, missing managed files, and latest auto-export warnings.
+- Added `mind setup refresh` to refresh detected mind-managed integrations with `--dry-run`, `--all`, and `--agent` controls.
 - Added `mind migrate sessions <project-space> [--dry-run]` to explicitly move legacy `sessions/<repo>` summaries into `projects/<repo>` with deterministic names, provenance, idempotency, and preserved links.
 
 - **`sync serve --detached`** — Background file watcher mode (like `mind serve --detached`) with PID file at `data/mind-sync-watch.pid`
@@ -43,7 +52,31 @@ Example:
 
 ### Changed
 
+- Changed autosync conflict detection to compare DB and file hashes against a
+  shared manifest baseline instead of treating file existence or timestamp drift
+  as a conflict. Timestamps remain available for audit and `latest-wins`
+  tie-breaking.
+- Changed autosync file-to-DB imports to update existing-memory content, tags,
+  tier, pinned state, and best-effort `links_to` when the conflict strategy
+  chooses the file side, while leaving frontmatter renames unsupported.
+- Changed `latest-wins` timestamp handling to accept near-future clock skew and
+  report far-future timestamps as unsafe skip reasons instead of generic invalid
+  timestamps or blind overwrites.
+- Changed automatic SQLite migrations to create a verified backup before outdated
+  DB upgrades, validate the migrated DB, restore automatically on migration
+  failure, and retain the last three automatic migration backups per DB path.
+- Changed `mind update` to run the newly installed `mind status` after the
+  installer when an existing DB was present, so post-update migrations happen
+  before integration refresh and fail the update on migration/restore errors.
+- Changed `mind update` to refresh detected integrations after successful installs by default, with `--no-refresh-integrations` as an opt-out.
 - Changed checkpoint/session continuity so `checkpoint_done` now creates same-space `session-*` summaries in `projects/<repo>` with tags `type:session` + `cat:summary` at T3, and new automation/protocol guidance no longer writes fresh project summaries to `sessions/<repo>`.
+- Changed mind protocol guidance to separate checkpoints, session summaries, durable memories, and living references, reducing low-value durable memory writes while documenting cautious deletion and convention-only `status:*` tags.
+- Changed mind protocol wording to clarify checkpoint-driven session summaries, authoritative living-reference tags, readable reference memory names, and compact `links_to` follow-up guidance.
+
+### Fixed
+
+- Fixed the installer-generated launcher to run the installed `src/mind.ts` entrypoint instead of the stale `cli/src/mind.ts` path.
+- Fixed mind protocol wording to use runtime-neutral validation language and avoid orchestration-specific report fields.
 
 - **Autosync** — Complete rewrite to file-based config (`.mind/config.yml`) instead of SQLite table
   - Config is now versioned with git for team collaboration

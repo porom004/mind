@@ -1,22 +1,24 @@
 // ── SQLite implementation of MindStore ──
 // Refactored to use Repository Factory pattern internally while maintaining MindStore interface
 
-import { existsSync, statSync, copyFileSync, unlinkSync } from 'fs';
+import { copyFileSync, existsSync, statSync, unlinkSync } from 'fs';
 
 import { Database } from 'bun:sqlite';
 
 import { isRagEnabled } from '../helpers/rag';
 import { FileSyncService } from '../sync';
-import type { Tier, StatusResult } from '../types';
+import { withAutoExport } from '../sync/auto-export-store';
+import type { StatusResult, Tier } from '../types';
 
+import { openDatabaseWithSafeMigrations } from './migration-safety';
 import type { MindStore } from './mind-store';
 import {
-  createTagRepository,
   createLinkRepository,
   createLogRepository,
-  createSpaceRepository,
   createMemoryRepository,
   createSearchRepository,
+  createSpaceRepository,
+  createTagRepository,
   subscribeToLogs,
   unsubscribeFromLogs,
 } from './repositories';
@@ -69,8 +71,7 @@ function ensureIntegrity(db: Database, dbPath: string): boolean {
 }
 
 export function createSqliteStore(dbPath: string): MindStore {
-  let db = new Database(dbPath, { create: true });
-  initializeDatabase(db);
+  let db = openDatabaseWithSafeMigrations(dbPath);
 
   if (!ensureIntegrity(db, dbPath)) {
     // Corrupt DB was backed up and removed — create fresh
@@ -173,7 +174,7 @@ export function createSqliteStore(dbPath: string): MindStore {
     db.close();
   }
 
-  return {
+  const store: MindStore = {
     // Spaces
     createSpace: (name, description, tags) => spaceRepo.createSpace(name, description, tags),
     getSpace: name => spaceRepo.getSpace(name),
@@ -243,4 +244,6 @@ export function createSqliteStore(dbPath: string): MindStore {
     // Lifecycle
     close,
   };
+
+  return withAutoExport(store, { source: 'cli' });
 }

@@ -295,6 +295,94 @@ describe('auto-sync service', () => {
     expect(memory?.content).toBe('Updated external content');
   });
 
+  test('importFile updates supported metadata and links for existing memories', async () => {
+    const source = await store.addMemory(
+      'projects/test',
+      'metadata-update',
+      'Original DB content',
+      {
+        tags: ['cat:old'],
+        tier: 3,
+      }
+    );
+    const target = await store.addMemory('projects/test', 'target-memory', 'Target content', {
+      tags: ['cat:target'],
+    });
+
+    const autoSync = new AutoSyncService(store, projectRoot);
+
+    const filePath = join(syncDir, 'metadata-update.md');
+    const fm = {
+      id: source.id,
+      space: 'projects/test',
+      name: 'metadata-update',
+      tier: 1,
+      pinned: true,
+      tags: ['cat:new', 'Sync/Tag'],
+      links_to: ['target-memory', 'missing-memory'],
+      created_at: source.created_at,
+      changed_at: '2024-01-01T00:00:00Z',
+    };
+    writeFileSync(filePath, generateMarkdown(fm, 'Updated metadata content'), 'utf-8');
+
+    const result = await autoSync.importFile(filePath, 'projects/test');
+
+    expect(result.action).toBe('updated');
+    expect(result.linksCreated).toBe(1);
+    expect(result.linksFailed).toBe(1);
+    expect(result.error).toContain('Link target not found: missing-memory');
+
+    const memory = store.getMemory('projects/test', 'metadata-update');
+    expect(memory?.content).toBe('Updated metadata content');
+    expect(memory?.tier).toBe(1);
+    expect(memory?.pinned).toBe(true);
+    expect(memory?.tags.sort()).toEqual(['cat:new', 'sync/tag']);
+    expect(store.getLinks(source.id).filter(link => link.target_id === target.id)).toHaveLength(1);
+  });
+
+  test('importFile skips invalid metadata without partially updating the memory', async () => {
+    const source = await store.addMemory(
+      'projects/test',
+      'invalid-metadata',
+      'Original DB content',
+      {
+        tags: ['cat:old'],
+        tier: 2,
+      }
+    );
+
+    const autoSync = new AutoSyncService(store, projectRoot);
+
+    const filePath = join(syncDir, 'invalid-metadata.md');
+    writeFileSync(
+      filePath,
+      generateMarkdown(
+        {
+          id: source.id,
+          space: 'projects/test',
+          name: 'invalid-metadata',
+          tier: 4,
+          pinned: false,
+          tags: ['cat:new'],
+          links_to: [],
+          created_at: source.created_at,
+          changed_at: '2024-01-01T00:00:00Z',
+        },
+        'Should not import'
+      ),
+      'utf-8'
+    );
+
+    const result = await autoSync.importFile(filePath, 'projects/test');
+
+    expect(result.action).toBe('failed');
+    expect(result.error).toContain('Invalid tier');
+    const memory = store.getMemory('projects/test', 'invalid-metadata');
+    expect(memory?.content).toBe('Original DB content');
+    expect(memory?.tier).toBe(2);
+    expect(memory?.tags).toEqual(['cat:old']);
+  });
+
   test('handles missing frontmatter gracefully', async () => {
     const autoSync = new AutoSyncService(store, projectRoot);
 
@@ -448,7 +536,7 @@ describe('import pipeline', () => {
       tags: ['cat:decision'],
       links_to: [],
       created_at: mem.created_at,
-      changed_at: '2099-01-01T00:00:00Z', // far future = definitely newer
+      changed_at: new Date(Date.parse(`${mem.changed_at.replace(' ', 'T')}Z`) + 1000).toISOString(),
     };
     writeFileSync(filePath, generateMarkdown(fm, 'File newer content'), 'utf-8');
 

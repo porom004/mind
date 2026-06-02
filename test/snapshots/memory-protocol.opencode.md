@@ -2,7 +2,7 @@
 
 Use this protocol whenever the `mind` MCP server is available.
 
-## MANDATORY: First Actions
+## Required First Actions
 
 1. `checkpoint_query` — find available checkpoints for the current project space
 2. `checkpoint_load { checkpointName: "<name>" }` — recover a specific checkpoint by name
@@ -12,9 +12,40 @@ Use this protocol whenever the `mind` MCP server is available.
 
 If this is your first time using mind tools in this session, call `system_instructions` to get the full usage protocol.
 
-## MANDATORY: During Work
+## Memory Types
 
-After EVERY significant event (decision, bug fix, discovery, config change, user preference):
+- Checkpoint = live/ephemeral work state. Keep goal, pending work, and current
+  blockers here; update it after subtasks and before risky changes.
+- Session summary = chronological log/recovery record created from a completed
+  checkpoint. It preserves what happened, but it is evidence, not canonical
+  truth.
+- Durable/canonical memory = atomic actionable knowledge for future sessions.
+- Living reference memory = maintained current truth map for a project, domain,
+  architecture, style, or workflow.
+
+| Need                                                                          | Use                                                | Result                               |
+| ----------------------------------------------------------------------------- | -------------------------------------------------- | ------------------------------------ |
+| Live goal, pending work, blockers, or next action                             | `checkpoint_save`                                  | Active checkpoint                    |
+| End-of-session recovery log                                                   | `checkpoint_done`                                  | Same-space `session-*` summary at T3 |
+| Stable decisions, root causes, patterns, preferences, config, or domain facts | `memory_add` / `memory_update`                     | Durable memory                       |
+| Compact current truth map                                                     | `memory_add` / `memory_update` with reference tags | Living reference                     |
+| Obsolete knowledge with no historical value                                   | `memory_delete`                                    | Removed memory                       |
+
+## During Work
+
+### Durable memory threshold
+
+Create or update durable memories when the information is likely useful in
+future sessions: stable decisions, verified root causes, final fixes, reusable
+patterns, user preferences, or significant config/domain facts. Keep transient
+observations, routine progress, and routine validation results with no new findings
+in checkpoints or session summaries.
+
+Durable memories are separate from session summaries. Use durable memories when
+future sessions need stable decisions, root causes, patterns, preferences,
+config, or domain facts.
+
+Use `memory_add` for new durable knowledge:
 
 ```
 memory_add {
@@ -28,13 +59,47 @@ memory_add {
 
 - Every memory MUST have at least 1 tag: `cat:decision`, `cat:bugfix`, `cat:discovery`, `cat:pattern`, `cat:preference`, `cat:config`
 - Always check for related memories with `memory_query { space: "<project>", search: "<keywords>" }` and pass their names to `links_to`
-- `links_to` is best-effort — always check `links_failed` in the response for any links that couldn't be created
+- When a new memory depends on, updates, or explains another memory, pass related memories in `links_to`.
+- After adding with `links_to`, check `links_created` and `links_failed`; retry important failed links with `link_create`.
 - Update checkpoint after completing subtasks: `checkpoint_save`
 
-## MANDATORY: Session End
+Persist verified root causes, regressions, risk decisions, or durable validation
+patterns. Don't persist routine validation outcomes unless they change future
+work.
 
-1. `checkpoint_done { space: "projects/<repo-name>", summary: "..." }`
-   → Auto-creates a same-space `session-*` memory in `projects/<repo-name>` with tags `type:session` + `cat:summary`, default tier T3, then deletes the checkpoint
+### Status tags
+
+`status:*` tags are convention-only, not schema-enforced. Use well-normed tags
+such as `status:proposed`, `status:validated`, `status:failed`,
+`status:superseded`, `status:obsolete`, `status:final`, and `status:living`.
+
+### Living reference memories
+
+Use living references for compact current truth. Create them at T2 by default;
+let reads naturally promote them to T1. Pin only 1–3 critical references when
+explicitly warranted or approved.
+
+Tags are authoritative. Required tags: `type:reference`, exactly one `ref:*`, and `status:living`.
+Recommended refs: `ref:project-map`, `ref:architecture`, `ref:style`,
+`ref:domain`, `ref:workflow`. The `ref:*` tag defines the reference category; the memory name is the readable identifier.
+
+Recommended names: `architecture-overview`, `project-map`, `style-guide`, `domain-model`, and `workflow-notes`.
+
+Recommended sections: Purpose, Current truth, Key areas/files/concepts, Active
+conventions, Source memories, Last reviewed, Maintenance notes.
+
+When current truth changes, use `memory_update` on the living reference and
+link it to source memories. Sessions remain evidence/logs, not canonical truth.
+
+### Cautious deletion
+
+Use `memory_delete` only when a memory is clearly obsolete, no longer
+applicable, and has no historical value. Otherwise, mark it with
+`status:obsolete` or `status:superseded` and link the replacement.
+
+## Session End
+
+1. Checkpoints hold live state; `checkpoint_done` completes the active checkpoint and creates a same-space `session-*` summary memory in `projects/<repo-name>` with `type:session` + `cat:summary` at T3.
 2. (optional) `memory_update` to enrich the session memory if needed
 
 ## Checkpoint Aging
@@ -51,10 +116,10 @@ If context resets or compaction happens:
 3. `memory_query { space: "<project>", search: "<keywords>" }` for recent context
 4. Re-establish goal, pending steps, and relevant files before making edits
 
-## You Are Breaking the Rules If
+## Quick Checklist
 
-- You did significant work without calling `memory_add`
-- You created a memory without tags
-- You created a memory related to an existing one without linking it
-- Your checkpoint is stale (doesn't reflect current progress)
-- You started working without calling `checkpoint_query` + `checkpoint_load` with specific name first
+- Start with `checkpoint_query`, `checkpoint_load`, `space_get`, and task-focused `memory_query`
+- Save live progress with `checkpoint_save`
+- Add tagged durable memories for stable knowledge that future sessions need
+- Link related memories with `links_to` or `link_create`
+- Close active work with `checkpoint_done`

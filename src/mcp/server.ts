@@ -12,6 +12,7 @@ import {
 import { createLogEntry } from '../helpers/logger';
 import type { MindStore } from '../store/mind-store';
 import { AutoSyncService as _AutoSyncService } from '../sync';
+import { withAutoExport } from '../sync/auto-export-store';
 
 import { zodToJsonSchema } from './helpers/json-schema';
 import type { ToolDefinition } from './tool-types';
@@ -130,7 +131,8 @@ export async function startAutosyncWatchers(store: MindStore, projectRoot?: stri
 }
 
 export async function startMcpServer(store: MindStore, projectRoot?: string): Promise<void> {
-  const server = createMcpServer(store);
+  const wrappedStore = withAutoExport(store, { source: 'mcp', projectRoot });
+  const server = createMcpServer(wrappedStore);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Mind MCP server running on stdio');
@@ -139,7 +141,7 @@ export async function startMcpServer(store: MindStore, projectRoot?: string): Pr
   const resolvedRoot = projectRoot ?? process.env.MIND_SYNC_ROOT ?? process.cwd();
 
   // Start autosync watchers for all enabled spaces
-  setImmediate(() => startAutosyncWatchers(store, resolvedRoot));
+  setImmediate(() => startAutosyncWatchers(wrappedStore, resolvedRoot));
 
   await new Promise(() => {}); // keep alive
 }
@@ -168,6 +170,7 @@ export async function startMcpHttpServer(
   port: number = 7438,
   projectRoot?: string
 ): Promise<void> {
+  const wrappedStore = withAutoExport(store, { source: 'mcp', projectRoot });
   const sessions = new Map<string, SessionEntry>();
   const mcpPort = Number(port || process.env.MCP_PORT || 7438);
   const idleTimeout = Number(process.env.MIND_MCP_IDLE_TIMEOUT ?? 120);
@@ -207,7 +210,7 @@ export async function startMcpHttpServer(
         }
 
         if (!sessionId && isInitializeRequest(body)) {
-          const server = createMcpServer(store);
+          const server = createMcpServer(wrappedStore);
           let transport: WebStandardStreamableHTTPServerTransport;
 
           transport = new WebStandardStreamableHTTPServerTransport({
@@ -251,5 +254,5 @@ export async function startMcpHttpServer(
   const resolvedRoot = projectRoot ?? process.env.MIND_SYNC_ROOT ?? process.cwd();
 
   // Start autosync watchers for all enabled spaces
-  setImmediate(() => startAutosyncWatchers(store, resolvedRoot));
+  setImmediate(() => startAutosyncWatchers(wrappedStore, resolvedRoot));
 }

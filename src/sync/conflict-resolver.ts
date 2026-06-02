@@ -1,5 +1,30 @@
 // ── Conflict Resolution for Sync ──
 
+const FUTURE_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
+
+export type TimestampClassification =
+  | { kind: 'valid'; epoch: number }
+  | { kind: 'missing' }
+  | { kind: 'invalid' }
+  | { kind: 'far-future'; epoch: number };
+
+export function classifyUtcTimestamp(value: string | null | undefined): TimestampClassification {
+  if (!value || typeof value !== 'string' || !value.trim()) return { kind: 'missing' };
+
+  const trimmed = value.trim();
+  const normalizedInput = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)
+    ? `${trimmed.replace(' ', 'T')}Z`
+    : trimmed;
+  const epoch = Date.parse(normalizedInput);
+  if (!Number.isFinite(epoch)) return { kind: 'invalid' };
+  if (epoch > Date.now() + FUTURE_TIMESTAMP_TOLERANCE_MS) return { kind: 'far-future', epoch };
+  return { kind: 'valid', epoch };
+}
+
+function parseComparableTimestampEpoch(value: string | null | undefined): number | null {
+  const classification = classifyUtcTimestamp(value);
+  return classification.kind === 'valid' ? classification.epoch : null;
+}
 import type { ConflictResolution } from './types';
 
 export interface DBMemory {
@@ -50,11 +75,20 @@ export function resolveConflict(conflict: Conflict, strategy: ConflictResolution
       return { resolution: 'use-file', reason: 'file-wins strategy' };
 
     case 'latest-wins': {
-      const dbTime = conflict.dbChangedAt ? new Date(conflict.dbChangedAt).getTime() : 0;
-      const fileTime = new Date(conflict.fileChangedAt).getTime();
-      return dbTime > fileTime
-        ? { resolution: 'use-db', reason: 'db is newer' }
-        : { resolution: 'use-file', reason: 'file is newer' };
+      const dbTimestamp = classifyUtcTimestamp(conflict.dbChangedAt);
+      const fileTimestamp = classifyUtcTimestamp(conflict.fileChangedAt);
+      if (fileTimestamp.kind === 'far-future') {
+        return { resolution: 'skip', reason: 'file timestamp is too far in the future' };
+      }
+      if (dbTimestamp.kind === 'far-future') {
+        return { resolution: 'skip', reason: 'db timestamp is too far in the future' };
+      }
+      if (dbTimestamp.kind !== 'valid' || fileTimestamp.kind !== 'valid') {
+        return { resolution: 'skip', reason: 'invalid timestamp for latest-wins comparison' };
+      }
+      return fileTimestamp.epoch > dbTimestamp.epoch
+        ? { resolution: 'use-file', reason: 'file is newer' }
+        : { resolution: 'use-db', reason: 'db is newer or equal' };
     }
   }
 }
@@ -78,14 +112,20 @@ export function shouldUpdateMemory(
       return true;
 
     case 'latest-wins':
-      // Compare changed_at timestamps
-      // If we can't compare, default to updating (file is source of truth for external changes)
-      if (!existingChangedAt || !fileFrontmatterChangedAt) {
-        return true;
-      }
-      return fileFrontmatterChangedAt > existingChangedAt;
+      return shouldUseFileForLatestWins(existingChangedAt, fileFrontmatterChangedAt);
 
     default:
       return false;
   }
+}
+
+function shouldUseFileForLatestWins(
+  existingChangedAt: string | null | undefined,
+  fileFrontmatterChangedAt: string | null | undefined
+): boolean {
+  const existingEpoch = parseComparableTimestampEpoch(existingChangedAt);
+  const fileEpoch = parseComparableTimestampEpoch(fileFrontmatterChangedAt);
+
+  if (existingEpoch === null || fileEpoch === null) return false;
+  return fileEpoch > existingEpoch;
 }

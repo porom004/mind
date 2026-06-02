@@ -10,6 +10,7 @@ import {
   getAgentCapabilities,
   listAgents,
   runSetup,
+  runSetupRefresh,
 } from '../src/cli/setup';
 
 let previousHome = '';
@@ -664,5 +665,80 @@ describe('Setup capability model', () => {
     // Fallback config file written
     const fallbackPath = join(tempHome, '.claude.json');
     expect(existsSync(fallbackPath)).toBe(true);
+  });
+
+  test('refresh default updates detected OpenCode managed artifacts without creating unrelated agent configs', async () => {
+    const opencodeDir = join(tempHome, '.config', 'opencode');
+    const configPath = join(opencodeDir, 'opencode.json');
+
+    mkdirSync(opencodeDir, { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          theme: 'dark',
+          mcp: {
+            mind: {
+              type: 'local',
+              command: ['/stale/mind', 'mcp'],
+              enabled: true,
+            },
+          },
+        },
+        null,
+        2
+      )
+    );
+
+    const result = await runSetupRefresh({ mode: 'detected' });
+
+    expect(result.refreshedAgents).toEqual(['opencode']);
+    const refreshed = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, any>;
+    expect(refreshed.theme).toBe('dark');
+    expect(refreshed.mcp.mind.command).toEqual([join(import.meta.dir, '..', 'mind'), 'mcp']);
+    expect(
+      existsSync(join(tempHome, '.config', 'opencode', 'instructions', 'mind-memory-protocol.md'))
+    ).toBe(true);
+    expect(existsSync(join(tempHome, '.config', 'opencode', 'plugins', 'mind-automation.js'))).toBe(
+      true
+    );
+    expect(existsSync(join(tempHome, '.cursor', 'mcp.json'))).toBe(false);
+    expect(existsSync(join(tempHome, '.gemini', 'settings.json'))).toBe(false);
+  });
+
+  test('refresh default skips agents with no mind-owned signal', async () => {
+    const result = await runSetupRefresh({ mode: 'detected' });
+
+    expect(result.refreshedAgents).toEqual([]);
+    expect(existsSync(join(tempHome, '.config', 'opencode', 'opencode.json'))).toBe(false);
+    expect(existsSync(join(tempHome, '.cursor', 'mcp.json'))).toBe(false);
+    expect(existsSync(join(tempHome, '.claude.json'))).toBe(false);
+  });
+
+  test('refresh repairs existing Claude hook artifacts without requiring opt-in env', async () => {
+    const claudeDir = join(tempHome, '.claude');
+    const settingsPath = join(tempHome, '.claude.json');
+    const hookPath = join(claudeDir, 'hooks', 'mind-session-summary.sh');
+
+    mkdirSync(join(claudeDir, 'hooks'), { recursive: true });
+    writeFileSync(hookPath, '#!/usr/bin/env bash\necho stale\n');
+    writeFileSync(
+      settingsPath,
+      JSON.stringify(
+        {
+          mcpServers: { mind: { command: '/stale/mind', args: ['mcp'] } },
+        },
+        null,
+        2
+      )
+    );
+
+    const result = await runSetupRefresh({ mode: 'detected' });
+
+    expect(result.refreshedAgents).toEqual(['claude-code']);
+    const refreshed = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, any>;
+    const stopHooks = refreshed.hooks?.Stop as Array<Record<string, any>>;
+    expect(Array.isArray(stopHooks)).toBe(true);
+    expect(readFileSync(hookPath, 'utf-8')).toContain('mind checkpoint set');
   });
 });

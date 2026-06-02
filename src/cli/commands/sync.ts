@@ -1,20 +1,21 @@
 // ── Sync CLI Commands ──
 // Uses file-based config (.mind/config.yml)
 
-import { existsSync, readFileSync, readdirSync, rmSync as _rmSync } from 'fs';
+import { existsSync, rmSync as _rmSync } from 'fs';
 import { join } from 'path';
 
 import { style } from '../../helpers/style';
 import { AutoSyncService } from '../../sync/auto-sync-service';
 import { loadConfig, saveConfig, initMindDir } from '../../sync/config-file';
-import { shouldUpdateMemory } from '../../sync/conflict-resolver';
 import {
   startSyncWatcherDetached,
   stopSyncWatcher,
   getSyncWatcherStatus,
 } from '../../sync/detached-watcher';
 import { FileSyncService } from '../../sync/file-sync-service';
+import { importFromDirectory } from '../../sync/importer';
 import { getSyncBasePath, getSpaceSyncDir, hashSpaceName } from '../../sync/normalize';
+import { evaluateSyncStatus } from '../../sync/status-diagnostics';
 import type { ConflictResolution, MindSyncConfig } from '../../sync/types';
 import { ArgParser } from '../arg-parser';
 
@@ -115,130 +116,6 @@ function updateConfig(
   const config = getConfig(projectRoot);
   const updated = updater(config);
   saveConfig(basePath, updated);
-}
-
-// ── Import helper ──
-
-interface ImportMemoryResult {
-  imported: number;
-  updated: number;
-  linksCreated: number;
-  linksFailed: number;
-  failed: number;
-  errors: string[];
-}
-
-/**
- * Resolve a memory reference string to a memory ID.
- * Supports "space:name" format for cross-space, bare "name" for same space.
- * Returns null if target memory doesn't exist.
- */
-function resolveMemoryRef(store: any, space: string, ref: string): number | null {
-  // Handle "space:name" format
-  if (ref.includes(':')) {
-    const colonIdx = ref.indexOf(':');
-    const targetSpace = ref.slice(0, colonIdx);
-    const targetName = ref.slice(colonIdx + 1);
-    const mem = store.getMemory(targetSpace, targetName);
-    return mem?.id ?? null;
-  }
-  // Bare name - resolve in same space
-  const mem = store.getMemory(space, ref);
-  return mem?.id ?? null;
-}
-
-/**
- * Import memories from a directory of markdown files into a space.
- * Uses conflict resolution strategy from file-based config.
- * Also creates links from links_to frontmatter field.
- */
-async function importFromDirectory(
-  store: any,
-  space: string,
-  basePath: string,
-  conflictResolution: ConflictResolution
-): Promise<ImportMemoryResult> {
-  const result: ImportMemoryResult = {
-    imported: 0,
-    updated: 0,
-    linksCreated: 0,
-    linksFailed: 0,
-    failed: 0,
-    errors: [],
-  };
-
-  if (!existsSync(basePath)) {
-    result.errors.push(`Directory does not exist: ${basePath}`);
-    return result;
-  }
-
-  const { parseFrontmatter } = await import('../../sync/frontmatter');
-  const files = readdirSync(basePath).filter(f => f.endsWith('.md'));
-
-  for (const file of files) {
-    try {
-      const filePath = join(basePath, file);
-      const content = readFileSync(filePath, 'utf-8');
-
-      // Parse frontmatter
-      const { frontmatter, content: body } = parseFrontmatter(content);
-
-      // Check if memory already exists
-      const existing = store.getMemory(space, frontmatter.name);
-
-      let memoryId: number | null = null;
-
-      if (existing) {
-        // Apply conflict resolution
-        const shouldUpdate = shouldUpdateMemory(
-          existing.changed_at,
-          frontmatter.changed_at,
-          conflictResolution
-        );
-        if (shouldUpdate) {
-          const mem = store.getMemory(space, frontmatter.name);
-          if (mem) {
-            store.updateMemory(mem.id, { content: body });
-            result.updated++;
-            memoryId = mem.id;
-          }
-        }
-      } else {
-        // Create new memory
-        const mem = await store.addMemory(space, frontmatter.name, body, {
-          tags: frontmatter.tags,
-          tier: frontmatter.tier,
-          pinned: frontmatter.pinned,
-        });
-        result.imported++;
-        memoryId = mem.id;
-      }
-
-      // Create links from links_to frontmatter (only for newly created memories)
-      if (memoryId && frontmatter.links_to && frontmatter.links_to.length > 0) {
-        for (const linkRef of frontmatter.links_to) {
-          const targetId = resolveMemoryRef(store, space, linkRef);
-          if (!targetId) {
-            result.linksFailed++;
-            result.errors.push(`Link target not found: ${linkRef} (in ${file})`);
-            continue;
-          }
-          try {
-            store.link(memoryId, targetId);
-            result.linksCreated++;
-          } catch (err) {
-            result.linksFailed++;
-            result.errors.push(`Failed to create link: ${linkRef} -> ${err}`);
-          }
-        }
-      }
-    } catch (err) {
-      result.failed++;
-      result.errors.push(`Failed to import ${file}: ${err}`);
-    }
-  }
-
-  return result;
 }
 
 // ── Command Group ──
@@ -350,15 +227,7 @@ export const syncGroup: CommandGroup = {
             ? style(`running (pid ${status.pid})`, ['green'])
             : style('stopped', ['yellow']);
 
-          // Count memories in space
-          const memories = store.listMemories(spaceFilter);
-          const memoryCount = memories.length;
-
-          // Count files in sync directory
-          let fileCount = 0;
-          if (existsSync(syncDir)) {
-            fileCount = readdirSync(syncDir).filter(f => f.endsWith('.md')).length;
-          }
+          const diagnostics = evaluateSyncStatus(store, spaceFilter, basePath);
 
           logger.logInfo('');
           logger.logInfo(` Sync Status for ${spaceFilter}`);
@@ -367,10 +236,33 @@ export const syncGroup: CommandGroup = {
             `  Enabled:        ${spaceConfig.enabled ? style('yes', ['green']) : style('no', ['red'])}`
           );
           logger.logInfo(`  Watcher:        ${watcherStatus}`);
-          logger.logInfo(`  Memories:       ${memoryCount}`);
-          logger.logInfo(`  Sync files:     ${fileCount}`);
+          logger.logInfo(`  Memories:       ${diagnostics.counts.dbMemories}`);
+          logger.logInfo(`  Sync files:     ${diagnostics.counts.files}`);
+          logger.logInfo(`  Manifest:       ${diagnostics.counts.manifestEntries} entries`);
+          logger.logInfo(`  Dirty DB:       ${diagnostics.counts.dirtyDb}`);
+          logger.logInfo(`  Dirty files:    ${diagnostics.counts.dirtyFiles}`);
+          logger.logInfo(`  Conflicts:      ${diagnostics.counts.conflicts}`);
+          logger.logInfo(`  Missing files:  ${diagnostics.counts.missingManagedFiles}`);
+          logger.logInfo(`  Tombstones:     ${diagnostics.counts.tombstones}`);
+          if (diagnostics.lastAutoExport) {
+            logger.logInfo(
+              `  Last export:    ${diagnostics.lastAutoExport.status} at ${diagnostics.lastAutoExport.at_utc}`
+            );
+            if (diagnostics.lastAutoExport.message) {
+              logger.logInfo(`                  ${diagnostics.lastAutoExport.message}`);
+            }
+          }
           logger.logInfo(`  Strategy:       ${style(spaceConfig.conflictResolution, ['cyan'])}`);
           logger.logInfo(`  Path:           ${syncDir}`);
+          if (diagnostics.warnings.length > 0 || diagnostics.conflicts.length > 0) {
+            logger.logInfo('');
+            for (const warning of diagnostics.warnings) {
+              logger.logInfo(style(`  ⚠ ${warning}`, ['yellow']));
+            }
+            for (const conflict of diagnostics.conflicts) {
+              logger.logInfo(style(`  ⚠ Conflict: ${conflict}`, ['yellow']));
+            }
+          }
           logger.logInfo('');
           return;
         }
@@ -392,11 +284,20 @@ export const syncGroup: CommandGroup = {
           const hash = hashSpaceName(spaceName);
           const pathDisplay = `.mind/spaces/${hash}/`;
           const strategyText = style(spaceConfig.conflictResolution, ['cyan']);
+          const diagnostics = evaluateSyncStatus(store, spaceName, basePath);
+          const drift =
+            diagnostics.counts.missingManagedFiles +
+            diagnostics.counts.dirtyDb +
+            diagnostics.counts.dirtyFiles +
+            diagnostics.counts.conflicts;
+          const driftText =
+            drift > 0 ? style(`${drift} drift`, ['yellow']) : style('clean', ['green']);
 
           lines.push(
             `${spaceName}`.padEnd(22) +
               `${statusIcon} ${statusText}`.padEnd(16) +
               `${strategyText}`.padEnd(14) +
+              `${driftText}`.padEnd(14) +
               `${pathDisplay}`
           );
         }
@@ -549,9 +450,6 @@ export const syncGroup: CommandGroup = {
           space,
           getSyncBasePath(projectRoot)
         );
-
-        // Clear sync lock after export
-        autoSync.clearSyncLock(syncDir);
 
         // Step 2: Import FS → DB (detect external changes)
         const importResult = await importFromDirectory(store, space, syncDir, resolution);

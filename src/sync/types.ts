@@ -18,6 +18,33 @@ export interface SpaceManifest {
   space: string;
 }
 
+export interface SpaceManifestV2Entry {
+  memory_name: string;
+  path: string;
+  memory_id?: number;
+  baseline_content_hash: string;
+  baseline_metadata_hash: string;
+  baseline_combined_hash: string;
+  db_changed_at_utc: string | null;
+  frontmatter_changed_at_utc: string | null;
+  last_seen_file_mtime_utc: string | null;
+  last_synced_at_utc: string;
+  deleted?: boolean;
+  tombstone_at_utc?: string;
+}
+
+export interface SpaceManifestV2 {
+  version: 2;
+  space: string;
+  manifest_updated_at_utc: string;
+  entries: Record<string, SpaceManifestV2Entry>;
+  last_auto_export?: {
+    status: 'ok' | 'warning' | 'error';
+    at_utc: string;
+    message?: string;
+  };
+}
+
 // ── Sync state types ──
 
 export interface SyncState {
@@ -43,6 +70,33 @@ export interface ExportResult {
   exported: number;
   failed: number;
   errors: string[];
+  warnings?: string[];
+}
+
+export interface ImportResult {
+  imported: number;
+  updated: number;
+  linksCreated: number;
+  linksFailed: number;
+  failed: number;
+  errors: string[];
+}
+
+export interface SyncStatusDiagnostics {
+  space: string;
+  counts: {
+    dbMemories: number;
+    files: number;
+    manifestEntries: number;
+    missingManagedFiles: number;
+    dirtyDb: number;
+    dirtyFiles: number;
+    conflicts: number;
+    tombstones: number;
+  };
+  warnings: string[];
+  conflicts: string[];
+  lastAutoExport: SpaceManifestV2['last_auto_export'] | null;
 }
 
 // ── File event types ──

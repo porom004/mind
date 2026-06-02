@@ -14,6 +14,7 @@ import {
   type SupportedAgent,
   formatCapabilityBadge,
   getAgentCapabilityMatrix,
+  getSupportedAgents,
 } from './capabilities';
 import { renderMemoryProtocol } from './memory-protocol';
 
@@ -157,6 +158,18 @@ function writeJson(filePath: string, value: Record<string, unknown>): void {
 function readText(filePath: string): string {
   if (!fs.existsSync(filePath)) return '';
   return fs.readFileSync(filePath, 'utf-8');
+}
+
+function jsonFileHasMindMcp(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+
+  const config = readJson(filePath);
+  const mcp = config.mcp as Record<string, unknown> | undefined;
+  const mcpServers = config.mcpServers as Record<string, unknown> | undefined;
+
+  return Boolean(mcp?.mind || mcpServers?.mind);
 }
 
 function writeText(filePath: string, content: string): void {
@@ -326,6 +339,18 @@ function ensureCodexManagedInstructions(): void {
 function shouldEnableClaudeHooks(): boolean {
   const value = (process.env[CLAUDE_HOOKS_OPT_IN_ENV] ?? '').trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'yes';
+}
+
+function hasClaudeHooksSignal(): boolean {
+  const home = getHomeDir();
+  const hookScriptPath = path.join(home, '.claude', 'hooks', CLAUDE_HOOK_SCRIPT_NAME);
+  if (fs.existsSync(hookScriptPath)) {
+    return true;
+  }
+
+  const settingsText = readText(path.join(home, '.claude', 'settings.json'));
+  const fallbackText = readText(path.join(home, '.claude.json'));
+  return [settingsText, fallbackText].some(text => text.includes(CLAUDE_HOOK_SCRIPT_NAME));
 }
 
 function ensureExecutableScript(filePath: string, content: string): string {
@@ -662,7 +687,8 @@ async function setupOpenCode(
 
 async function setupClaudeCode(
   merged: Record<string, unknown>,
-  _mindPath: string
+  _mindPath: string,
+  options: RunSetupOptions = {}
 ): Promise<Record<string, unknown>> {
   const instructionsPath = ensureClaudeInstructionPath();
   ensureClaudeManagedInstructions(instructionsPath);
@@ -679,11 +705,12 @@ async function setupClaudeCode(
     console.log(`⚠️ skill installation failed: ${message}`);
   }
 
-  if (shouldEnableClaudeHooks()) {
+  const shouldRefreshHooks = options.refreshExistingClaudeHooks && hasClaudeHooksSignal();
+  if (shouldEnableClaudeHooks() || shouldRefreshHooks) {
     try {
       const hookScriptPath = ensureClaudeHookScript();
       merged = withClaudeHooksConfig(merged, hookScriptPath);
-      console.log(`✅ Claude hooks opt-in enabled`);
+      console.log(`✅ Claude hooks configured`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.log(`⚠️ hooks setup failed: ${message}`);
@@ -805,7 +832,15 @@ function removeLegacyUrlField(merged: Record<string, unknown>): void {
   }
 }
 
-export async function runSetup(agent: SupportedAgent): Promise<void> {
+export interface RunSetupOptions {
+  skipExternalCli?: boolean;
+  refreshExistingClaudeHooks?: boolean;
+}
+
+export async function runSetup(
+  agent: SupportedAgent,
+  options: RunSetupOptions = {}
+): Promise<void> {
   const cfg = getAgentConfig(agent);
   const mcpUrl = `http://localhost:${getMcpPort()}/mcp`;
   const mindPath = getMindScriptPath();
@@ -816,7 +851,7 @@ export async function runSetup(agent: SupportedAgent): Promise<void> {
 
   if (cfg.format === 'json') {
     // For claude-code, try official CLI first before building merged config
-    if (agent === 'claude-code') {
+    if (agent === 'claude-code' && !options.skipExternalCli) {
       const cliResult = tryClaudeMcpAdd(mindPath);
 
       if (cliResult.ok) {
@@ -827,6 +862,8 @@ export async function runSetup(agent: SupportedAgent): Promise<void> {
         console.warn('  - Falling back to JSON config...');
         claudeFallbackWritePath = path.join(getHomeDir(), '.claude.json');
       }
+    } else if (agent === 'claude-code' && fs.existsSync(path.join(getHomeDir(), '.claude.json'))) {
+      claudeFallbackWritePath = path.join(getHomeDir(), '.claude.json');
     }
 
     // For claude-code fallback path: read from fallback if it exists, otherwise from primary config
@@ -846,7 +883,7 @@ export async function runSetup(agent: SupportedAgent): Promise<void> {
     if (agent === 'opencode') {
       merged = await setupOpenCode(merged, mindPath);
     } else if (agent === 'claude-code') {
-      merged = await setupClaudeCode(merged, mindPath);
+      merged = await setupClaudeCode(merged, mindPath, options);
     } else if (agent === 'cursor') {
       merged = await setupCursor(merged);
     } else if (agent === 'windsurf') {
@@ -892,6 +929,152 @@ export async function runSetup(agent: SupportedAgent): Promise<void> {
     }
   }
   printCapabilityDiagnostics(cfg.capabilities);
+}
+
+export interface SetupRefreshOptions {
+  mode?: 'detected' | 'all';
+  agent?: SupportedAgent;
+  dryRun?: boolean;
+}
+
+export interface SetupRefreshResult {
+  refreshedAgents: SupportedAgent[];
+  skippedAgents: SupportedAgent[];
+}
+
+function getSharedSkillPath(): string {
+  return path.join(getHomeDir(), '.agents', 'skills', 'mind-management', 'SKILL.md');
+}
+
+function getAgentSkillSignalPath(agent: SupportedAgent): string | null {
+  const home = getHomeDir();
+  switch (agent) {
+    case 'opencode':
+      return path.join(home, '.config', 'opencode', 'skills', 'mind-management', 'SKILL.md');
+    case 'claude-code':
+      return path.join(home, '.claude', 'skills', 'mind-management', 'SKILL.md');
+    case 'cursor':
+      return path.join(home, '.cursor', 'skills', 'mind-management', 'SKILL.md');
+    case 'gemini-cli':
+      return path.join(home, '.gemini', 'skills', 'mind-management', 'SKILL.md');
+    case 'antigravity':
+      return path.join(home, '.gemini', 'antigravity', 'skills', 'mind-management', 'SKILL.md');
+    case 'codex':
+    case 'windsurf':
+    case 'vscode':
+      return getSharedSkillPath();
+  }
+}
+
+function hasAgentSkillSignal(agent: SupportedAgent): boolean {
+  const skillPath = getAgentSkillSignalPath(agent);
+  if (!skillPath || !fs.existsSync(skillPath)) {
+    return false;
+  }
+
+  if (!['codex', 'windsurf', 'vscode'].includes(agent)) {
+    return true;
+  }
+
+  const cfg = getAgentConfig(agent);
+  return fs.existsSync(path.dirname(cfg.configPath));
+}
+
+function textFileContains(filePath: string, text: string): boolean {
+  return readText(filePath).includes(text);
+}
+
+export function isAgentIntegrationDetected(agent: SupportedAgent): boolean {
+  const home = getHomeDir();
+  const cfg = getAgentConfig(agent);
+
+  if (jsonFileHasMindMcp(cfg.configPath) || hasAgentSkillSignal(agent)) {
+    return true;
+  }
+
+  switch (agent) {
+    case 'opencode':
+      return (
+        fs.existsSync(
+          path.join(home, '.config', 'opencode', 'instructions', OPENCODE_MEMORY_PROTOCOL_FILENAME)
+        ) ||
+        fs.existsSync(
+          path.join(home, '.config', 'opencode', 'plugins', OPENCODE_AUTOMATION_PLUGIN_FILENAME)
+        )
+      );
+    case 'claude-code':
+      return (
+        jsonFileHasMindMcp(path.join(home, '.claude.json')) ||
+        fs.existsSync(
+          path.join(home, '.claude', 'instructions', CLAUDE_MEMORY_PROTOCOL_FILENAME)
+        ) ||
+        textFileContains(path.join(home, '.claude', 'CLAUDE.md'), CLAUDE_MANAGED_BLOCK_START) ||
+        hasClaudeHooksSignal()
+      );
+    case 'codex':
+      return (
+        textFileContains(cfg.configPath, '[mcp_servers.mind]') ||
+        textFileContains(path.join(home, '.codex', 'AGENTS.md'), CLAUDE_MANAGED_BLOCK_START)
+      );
+    case 'cursor':
+      return (
+        (fs.existsSync(path.join(home, '.cursor', 'hooks.json')) &&
+          textFileContains(path.join(home, '.cursor', 'hooks.json'), CURSOR_HOOK_SCRIPT_NAME)) ||
+        fs.existsSync(path.join(home, '.cursor', 'hooks', CURSOR_HOOK_SCRIPT_NAME))
+      );
+    case 'windsurf':
+    case 'gemini-cli':
+    case 'vscode':
+    case 'antigravity':
+      return false;
+  }
+}
+
+function getRefreshCandidateAgents(agent?: SupportedAgent): SupportedAgent[] {
+  if (!agent) {
+    return getSupportedAgents() as SupportedAgent[];
+  }
+
+  if (!getSupportedAgents().includes(agent)) {
+    throw new Error(`Unsupported agent: ${agent}`);
+  }
+  return [agent];
+}
+
+export async function runSetupRefresh(
+  options: SetupRefreshOptions = {}
+): Promise<SetupRefreshResult> {
+  const mode = options.mode ?? 'detected';
+  const candidates = getRefreshCandidateAgents(options.agent);
+  const refreshedAgents: SupportedAgent[] = [];
+  const skippedAgents: SupportedAgent[] = [];
+
+  for (const agent of candidates) {
+    const detected = mode === 'all' || isAgentIntegrationDetected(agent);
+    if (!detected) {
+      skippedAgents.push(agent);
+      continue;
+    }
+
+    refreshedAgents.push(agent);
+    if (options.dryRun) {
+      console.log(`Would refresh ${agent}`);
+      continue;
+    }
+
+    await runSetup(agent, {
+      skipExternalCli: true,
+      refreshExistingClaudeHooks: true,
+    });
+  }
+
+  if (refreshedAgents.length === 0) {
+    console.log('No detected mind integrations to refresh.');
+  } else if (!options.dryRun) {
+    console.log(`✅ Refreshed integrations: ${refreshedAgents.join(', ')}`);
+  }
+
+  return { refreshedAgents, skippedAgents };
 }
 
 function getAgentBadge(status: 'supported' | 'unsupported' | 'unverified'): string {

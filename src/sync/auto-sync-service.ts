@@ -4,12 +4,10 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync, readdir
 import { join } from 'path';
 
 import type { MindStore } from '../store/mind-store';
-import type { Tier } from '../types';
 
 import { loadConfig, saveConfig as _saveConfig } from './config-file';
-import { shouldUpdateMemory } from './conflict-resolver';
 import { FileWatcher } from './file-watcher';
-import { parseFrontmatter } from './frontmatter';
+import { importMarkdownFile } from './importer';
 import { getSyncBasePath, getSpaceDir } from './normalize';
 import type { FileEvent, SpaceSyncConfig } from './types';
 
@@ -26,6 +24,8 @@ interface SyncLock {
 interface ImportResult {
   action: 'imported' | 'updated' | 'skipped' | 'deleted' | 'failed';
   memoryName?: string;
+  linksCreated?: number;
+  linksFailed?: number;
   error?: string;
 }
 
@@ -174,41 +174,7 @@ export class AutoSyncService {
         return { action: 'failed', error: 'No sync config' };
       }
 
-      const content = await Bun.file(filePath).text();
-      let frontmatter: ReturnType<typeof parseFrontmatter>['frontmatter'];
-      let body: string;
-
-      try {
-        ({ frontmatter, content: body } = parseFrontmatter(content));
-      } catch (err) {
-        return { action: 'failed', error: `Invalid frontmatter: ${err}` };
-      }
-
-      // Look up existing memory by name
-      const existing = this.store.getMemory(space, frontmatter.name);
-
-      if (existing) {
-        // Decide whether to update based on conflict resolution
-        const shouldUpdate = shouldUpdateMemory(
-          existing.changed_at,
-          frontmatter.changed_at,
-          spaceConfig.conflictResolution
-        );
-        if (shouldUpdate) {
-          await this.store.updateMemory(existing.id, { content: body });
-          return { action: 'updated', memoryName: frontmatter.name };
-        } else {
-          return { action: 'skipped', memoryName: frontmatter.name };
-        }
-      } else {
-        // Create new memory
-        const mem = await this.store.addMemory(space, frontmatter.name, body, {
-          tags: frontmatter.tags,
-          tier: frontmatter.tier as Tier,
-          pinned: frontmatter.pinned,
-        });
-        return { action: 'imported', memoryName: mem.name };
-      }
+      return await importMarkdownFile(this.store, space, filePath, spaceConfig.conflictResolution);
     } catch (err) {
       return { action: 'failed', error: String(err) };
     } finally {

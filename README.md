@@ -75,6 +75,11 @@ Then run:
 mind help
 ```
 
+The installer creates a launcher that runs the installed `src/mind.ts` entry
+point. It doesn't configure every supported agent automatically. To refresh
+existing mind-managed agent integrations after installation, run
+`mind setup refresh`.
+
 ### Requirements
 
 - [Bun](https://bun.sh/) 1.2+ (auto installed by the one-line installer if not present)
@@ -122,7 +127,14 @@ mind setup windsurf
 mind setup gemini-cli
 mind setup vscode
 mind setup antigravity
+mind setup refresh      # refresh detected mind-managed integrations
 ```
+
+`mind setup refresh` is conservative by default. It refreshes only detected
+integrations, where detection means mind finds an existing mind-owned signal,
+such as an MCP config, managed protocol block, hook/plugin/script, or installed
+mind-management skill. Use `--dry-run` to preview changes, `--all` to refresh
+all supported agents, or `--agent <name>` to target one agent.
 
 ### Post-install configuration
 
@@ -203,7 +215,9 @@ mind update
 
 Autosync lets you mirror project spaces to a versioned `.mind/` directory so
 you can review memory files in git, edit markdown on disk, and sync those
-changes back into the local database.
+changes back into the local database. When a space is enabled, successful DB
+mutations made through the CLI, web/API, or MCP also export the affected space
+back to `.mind/spaces/<hash>/` as a non-blocking side effect.
 
 <!-- prettier-ignore -->
 > [!NOTE]
@@ -215,8 +229,9 @@ Set up autosync with the following flow:
 2. Review or edit `.mind/config.yml` to choose which spaces are configured.
 3. Run `mind sync enable --space <name>` for the project space you want to
    sync.
-4. Run `mind sync serve --space <name>` to start the watcher in the current
-   terminal, or rely on MCP startup to auto-start watchers for enabled spaces.
+4. Optional: Run `mind sync serve --space <name>` to start the watcher in the
+   current terminal, or rely on MCP startup to auto-start watchers for enabled
+   spaces.
 
 The `.mind/` directory uses a file-based config and hashed space directories:
 
@@ -246,9 +261,20 @@ Use these commands to manage autosync:
 
 Conflict strategies:
 
-- `db-wins`
-- `file-wins`
-- `latest-wins`
+- `db-wins` writes the DB version on real conflicts and prunes only files that
+  the manifest marks as managed.
+- `file-wins` preserves the file side on real conflicts. Automatic DB-to-file
+  exports skip the conflicting file and record a warning.
+- `latest-wins` uses normalized UTC timestamps as a tie-break after hash-based
+  dirty detection. Near-future timestamps within five minutes are accepted for
+  clock skew, while farther future timestamps are reported as unsafe and skipped
+  instead of blindly overwriting.
+
+Autosync writes manifest v2 files. Each manifest entry tracks managed file
+ownership, the memory name, path, optional DB ID, canonical content and metadata
+hashes, normalized UTC timestamps, file modification time, and the last sync
+time. Hashes decide whether the DB side, file side, both sides, or neither side
+changed since the common baseline. A file's mere existence isn't a conflict.
 
 Example `.mind/config.yml`:
 
@@ -268,13 +294,22 @@ spaces:
 
 Current limitations and caveats:
 
-- Existing-memory imports update content only. They do not restore full
-  metadata parity from files.
+- `mind sync status --space <name>` reports DB, file, and manifest counts,
+  dirty DB/file drift, conflicts, tombstones, missing managed files, and the
+  latest auto-export warning or error when manifest data is available.
+- Existing-memory imports update supported metadata from files when the conflict
+  strategy chooses file-to-DB: content, tags, tier, pinned state, and `links_to`
+  links. Invalid metadata skips that file safely, unresolved links are reported,
+  and frontmatter `name` does not rename existing memories.
 - Exported `links_to` values are written to frontmatter, and imports recreate
   those links in the database.
 - Deleting a synced markdown file does not auto-delete the corresponding
-  database memory.
-- `sync serve` runs in the foreground only.
+  database memory. `mind sync status` reports missing managed files as drift so
+  you can restore or delete intentionally. DB-side deletes and renames prune only
+  files that the manifest marks as managed.
+- Automatic DB-to-file export warnings are recorded in logs and don't fail the
+  original CLI, API, or MCP mutation. Explicit `sync export`, `sync import`, and
+  `sync now` commands still report sync failures visibly.
 
 ### Web Server
 
@@ -464,7 +499,16 @@ mind can update itself from GitHub Releases:
 mind update --check                 # check if a newer release exists
 mind update                         # update to latest release
 mind update --version v0.1.0        # update to a specific tag
+mind update --no-refresh-integrations
 ```
+
+After a successful update, if a database existed before installation, Mind runs
+the newly installed `mind status` first. This forces automatic DB migration,
+backup validation, and restore handling before refreshing integrations. Fresh
+installs with no existing DB skip this step so `mind update` doesn't create a
+database. Mind then refreshes detected mind-managed integrations by default so
+protocols, MCP configs, hooks, plugins, scripts, skills, and managed cleanup stay
+current. Use `--no-refresh-integrations` to skip the integration refresh.
 
 ## Data Storage
 
