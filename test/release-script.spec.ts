@@ -21,6 +21,11 @@ beforeEach(async () => {
     join(tempDir, 'package-lock.json'),
     `${JSON.stringify({ name: 'mind', version: '1.2.1', lockfileVersion: 3, packages: { '': { name: 'mind', version: '1.2.1' } } }, null, 2)}\n`
   );
+  await mkdir(join(tempDir, 'test'));
+  await writeFile(
+    join(tempDir, 'test', 'release-fixture.spec.ts'),
+    "import { expect, it } from 'bun:test';\n\nit('passes release fixture', () => {\n  expect(true).toBe(true);\n});\n"
+  );
   await writeFile(
     join(tempDir, 'CHANGELOG.md'),
     '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Added release prep coverage.\n\n## [1.4.0] - 2026-04-10\n\n- Previous release.\n'
@@ -70,6 +75,12 @@ async function runRelease(args: string[], branch = 'main') {
 }
 
 describe('release script', () => {
+  it('creates a minimal fixture test suite for non-simulated releases', async () => {
+    const fixtureTest = await readFile(join(tempDir, 'test', 'release-fixture.spec.ts'), 'utf8');
+
+    expect(fixtureTest).toContain("import { expect, it } from 'bun:test';");
+  });
+
   it('passes a curated notes file to GitHub releases when provided', async () => {
     await writeFile(join(tempDir, 'notes.md'), 'Curated release notes\n');
 
