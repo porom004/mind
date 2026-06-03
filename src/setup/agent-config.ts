@@ -1,7 +1,8 @@
 // Data-driven agent configuration for setup.ts
 // Replaces the ~400-line inline object map with a config array
 
-import { homedir } from 'os';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import * as path from 'path';
 
 import type { CapabilityMap, SupportedAgent } from '../cli/capabilities';
@@ -74,6 +75,14 @@ interface AgentConfigInternal {
   agent: SupportedAgent;
   name: string;
   pathComponents: string[]; // Relative path components from home dir
+  /**
+   * Optional path preference: when set, the resolver picks the first existing
+   * path among `pathComponents`/`pathAlternatives`. When none exist, the
+   * first listed path is used for the new file. Use this for agents that
+   * accept a JSON-with-comments variant (e.g. opencode.jsonc) and prefer it
+   * when present.
+   */
+  pathAlternatives?: string[][];
   format: 'json' | 'toml';
   build: (_mcpUrl: string, _mindPath: string) => string | Record<string, unknown>;
   capabilities: CapabilityMap;
@@ -91,9 +100,17 @@ const AGENT_CONFIGS: AgentConfigInternal[] = [
     capabilities: getAgentCapabilities('claude-code'),
   },
   {
+    // OpenCode accepts both opencode.json and opencode.jsonc. We PREFER
+    // opencode.jsonc when it exists, and we NEVER create opencode.json if
+    // opencode.jsonc already exists. This avoids creating a second config
+    // file that the user did not ask for.
     agent: 'opencode',
     name: getSupportedAgentDefinition('opencode').name,
-    pathComponents: ['.config', 'opencode', 'opencode.json'],
+    pathComponents: ['.config', 'opencode', 'opencode.jsonc'],
+    pathAlternatives: [
+      ['.config', 'opencode', 'opencode.jsonc'],
+      ['.config', 'opencode', 'opencode.json'],
+    ],
     format: 'json',
     build: buildOpenCodeMcpConfig,
     capabilities: getAgentCapabilities('opencode'),
@@ -153,6 +170,19 @@ const AGENT_CONFIG_MAP = new Map<SupportedAgent, AgentConfigInternal>(
   AGENT_CONFIGS.map(cfg => [cfg.agent, cfg])
 );
 
+// Resolves the preferred config path for agents that have alternative paths
+// (e.g. opencode.jsonc over opencode.json). Returns the first path in
+// `alternatives` that exists on disk, or the first listed path if none exist.
+function resolvePreferredPath(alternatives: string[][]): string {
+  for (const components of alternatives) {
+    const candidate = path.join(getHomeDir(), ...components);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return path.join(getHomeDir(), ...(alternatives[0] ?? []));
+}
+
 // Returns the agent config for a given agent type, with configPath resolved at call time
 export function getAgentConfig(agent: SupportedAgent): AgentConfigEntry {
   const config = AGENT_CONFIG_MAP.get(agent);
@@ -161,10 +191,14 @@ export function getAgentConfig(agent: SupportedAgent): AgentConfigEntry {
   }
 
   // Compute configPath dynamically at call time (not module load time)
-  const configPath =
-    config.pathComponents.length > 0
-      ? path.join(getHomeDir(), ...config.pathComponents)
-      : getVSCodeUserConfigPath(); // VSCode uses platform-specific path
+  let configPath: string;
+  if (config.pathAlternatives && config.pathAlternatives.length > 0) {
+    configPath = resolvePreferredPath(config.pathAlternatives);
+  } else if (config.pathComponents.length > 0) {
+    configPath = path.join(getHomeDir(), ...config.pathComponents);
+  } else {
+    configPath = getVSCodeUserConfigPath(); // VSCode uses platform-specific path
+  }
 
   return {
     name: config.name,
@@ -177,14 +211,21 @@ export function getAgentConfig(agent: SupportedAgent): AgentConfigEntry {
 
 // Returns all agent configs (for iteration), with configPath resolved at call time
 export function getAllAgentConfigs(): AgentConfigEntry[] {
-  return AGENT_CONFIGS.map(config => ({
-    name: config.name,
-    configPath:
-      config.pathComponents.length > 0
-        ? path.join(getHomeDir(), ...config.pathComponents)
-        : getVSCodeUserConfigPath(),
-    format: config.format,
-    build: config.build,
-    capabilities: config.capabilities,
-  }));
+  return AGENT_CONFIGS.map(config => {
+    let configPath: string;
+    if (config.pathAlternatives && config.pathAlternatives.length > 0) {
+      configPath = resolvePreferredPath(config.pathAlternatives);
+    } else if (config.pathComponents.length > 0) {
+      configPath = path.join(getHomeDir(), ...config.pathComponents);
+    } else {
+      configPath = getVSCodeUserConfigPath();
+    }
+    return {
+      name: config.name,
+      configPath,
+      format: config.format,
+      build: config.build,
+      capabilities: config.capabilities,
+    };
+  });
 }

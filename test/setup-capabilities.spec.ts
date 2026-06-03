@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -740,5 +748,287 @@ describe('Setup capability model', () => {
     const stopHooks = refreshed.hooks?.Stop as Array<Record<string, any>>;
     expect(Array.isArray(stopHooks)).toBe(true);
     expect(readFileSync(hookPath, 'utf-8')).toContain('mind checkpoint set');
+  });
+});
+
+describe('Setup safety: parse failure and atomic writes (cross-agent)', () => {
+  test('aborts and does not overwrite a malformed Claude settings.json', async () => {
+    const claudeDir = join(tempHome, '.claude');
+    const settingsPath = join(claudeDir, 'settings.json');
+    mkdirSync(claudeDir, { recursive: true });
+    const original = '{ "theme": "dark", "mcpServers": '; // truncated
+    writeFileSync(settingsPath, original);
+
+    let caught: Error | null = null;
+    try {
+      await runSetup('claude-code');
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(String(caught?.message ?? '')).toMatch(/malformed|setup/i);
+
+    // Original file is unchanged. (May have been moved/renamed in fallback,
+    // but the content we wrote to settings.json stays.)
+    expect(readFileSync(settingsPath, 'utf-8')).toBe(original);
+  });
+
+  test('backs up Cursor mcp.json before mutating it', async () => {
+    const cursorDir = join(tempHome, '.cursor');
+    const mcpPath = join(cursorDir, 'mcp.json');
+    mkdirSync(cursorDir, { recursive: true });
+    const original = { mcpServers: { github: { command: 'gh' } } };
+    writeFileSync(mcpPath, JSON.stringify(original, null, 2));
+
+    await runSetup('cursor');
+
+    const entries = readdirSync(cursorDir).filter(name => name.startsWith('mcp.json.bak.'));
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    const backup = JSON.parse(
+      readFileSync(join(cursorDir, entries[0] as string), 'utf-8')
+    ) as Record<string, any>;
+    expect(backup.mcpServers.github.command).toBe('gh');
+  });
+
+  test('aborts and does not overwrite a malformed Windsurf mcp.json', async () => {
+    const windsurfDir = join(tempHome, '.windsurf');
+    const mcpPath = join(windsurfDir, 'mcp.json');
+    mkdirSync(windsurfDir, { recursive: true });
+    const original = '{ "mcpServers": '; // truncated
+    writeFileSync(mcpPath, original);
+
+    let caught: Error | null = null;
+    try {
+      await runSetup('windsurf');
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(readFileSync(mcpPath, 'utf-8')).toBe(original);
+  });
+
+  test('aborts and does not overwrite a malformed Gemini settings.json', async () => {
+    const geminiDir = join(tempHome, '.gemini');
+    const settingsPath = join(geminiDir, 'settings.json');
+    mkdirSync(geminiDir, { recursive: true });
+    const original = '{ "mcpServers": '; // truncated
+    writeFileSync(settingsPath, original);
+
+    let caught: Error | null = null;
+    try {
+      await runSetup('gemini-cli');
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(readFileSync(settingsPath, 'utf-8')).toBe(original);
+  });
+
+  test('aborts and does not overwrite a malformed VSCode mcp.json', async () => {
+    const vscodeDir = join(tempHome, '.config', 'Code', 'User');
+    const mcpPath = join(vscodeDir, 'mcp.json');
+    mkdirSync(vscodeDir, { recursive: true });
+    const original = '{ "mcpServers": '; // truncated
+    writeFileSync(mcpPath, original);
+
+    let caught: Error | null = null;
+    try {
+      await runSetup('vscode');
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(readFileSync(mcpPath, 'utf-8')).toBe(original);
+  });
+
+  test('aborts and does not overwrite a malformed Antigravity mcp_config.json', async () => {
+    const antigravityDir = join(tempHome, '.gemini', 'antigravity');
+    const mcpPath = join(antigravityDir, 'mcp_config.json');
+    mkdirSync(antigravityDir, { recursive: true });
+    const original = '{ "mcpServers": '; // truncated
+    writeFileSync(mcpPath, original);
+
+    let caught: Error | null = null;
+    try {
+      await runSetup('antigravity');
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(readFileSync(mcpPath, 'utf-8')).toBe(original);
+  });
+
+  test('refresh path also uses safe writes and backs up files', async () => {
+    const cursorDir = join(tempHome, '.cursor');
+    const mcpPath = join(cursorDir, 'mcp.json');
+    mkdirSync(cursorDir, { recursive: true });
+    const original = { mcpServers: { mind: { command: '/stale/mind', args: ['mcp'] } } };
+    writeFileSync(mcpPath, JSON.stringify(original, null, 2));
+
+    // Mark as detected so refresh picks it up.
+    const result = await runSetupRefresh({ mode: 'detected' });
+    expect(result.refreshedAgents).toContain('cursor');
+
+    const entries = readdirSync(cursorDir).filter(name => name.startsWith('mcp.json.bak.'));
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    const backup = JSON.parse(
+      readFileSync(join(cursorDir, entries[0] as string), 'utf-8')
+    ) as Record<string, any>;
+    expect(backup.mcpServers.mind.command).toBe('/stale/mind');
+  });
+});
+
+describe('Codex TOML write path safety', () => {
+  test('creates a brand-new config.toml when none exists (no backup)', async () => {
+    await runSetup('codex');
+
+    const configPath = join(tempHome, '.codex', 'config.toml');
+    expect(existsSync(configPath)).toBe(true);
+    const text = readFileSync(configPath, 'utf-8');
+    expect(text).toContain('[mcp_servers.mind]');
+    expect(text).toContain('args = ["mcp"]');
+
+    // No backup sibling for a previously-missing target.
+    const codexDir = join(tempHome, '.codex');
+    const entries = readdirSync(codexDir).filter(n => n.startsWith('config.toml.bak.'));
+    expect(entries).toEqual([]);
+  });
+
+  test('appends the mind stanza when an existing config has no mind stanza, preserving unrelated content', async () => {
+    const codexDir = join(tempHome, '.codex');
+    const configPath = join(codexDir, 'config.toml');
+    mkdirSync(codexDir, { recursive: true });
+
+    const original = ['# pre-existing user config', '[user_settings]', 'theme = "dark"', ''].join(
+      '\n'
+    );
+    writeFileSync(configPath, original);
+
+    await runSetup('codex');
+
+    const after = readFileSync(configPath, 'utf-8');
+    expect(after).toContain('# pre-existing user config');
+    expect(after).toContain('[user_settings]');
+    expect(after).toContain('theme = "dark"');
+    expect(after).toContain('[mcp_servers.mind]');
+    expect(after).toContain('args = ["mcp"]');
+
+    // Stanza count is exactly one (no duplicates from a second run).
+    const stanzaCount = after.split('[mcp_servers.mind]').length - 1;
+    expect(stanzaCount).toBe(1);
+
+    // Backup created with pre-write content.
+    const entries = readdirSync(codexDir).filter(n => n.startsWith('config.toml.bak.'));
+    expect(entries.length).toBe(1);
+    expect(readFileSync(join(codexDir, entries[0] as string), 'utf-8')).toBe(original);
+  });
+
+  test('replaces a stale mind stanza with the new one, preserving unrelated content', async () => {
+    const codexDir = join(tempHome, '.codex');
+    const configPath = join(codexDir, 'config.toml');
+    mkdirSync(codexDir, { recursive: true });
+
+    const original = [
+      '# pre-existing user config',
+      '[user_settings]',
+      'theme = "dark"',
+      '',
+      '[mcp_servers.mind]',
+      'command = "/stale/path/to/mind"',
+      'args = ["mcp", "--http"]',
+      '',
+    ].join('\n');
+    writeFileSync(configPath, original);
+
+    await runSetup('codex');
+
+    const after = readFileSync(configPath, 'utf-8');
+    // Unrelated user content is preserved.
+    expect(after).toContain('# pre-existing user config');
+    expect(after).toContain('[user_settings]');
+    expect(after).toContain('theme = "dark"');
+    // Stale command/args are gone.
+    expect(after).not.toContain('/stale/path/to/mind');
+    expect(after).not.toContain('--http');
+    // The new stanza is present exactly once.
+    const stanzaCount = after.split('[mcp_servers.mind]').length - 1;
+    expect(stanzaCount).toBe(1);
+    expect(after).toContain('args = ["mcp"]');
+  });
+
+  test('is a no-op on a re-run when the file already has the freshly-built stanza', async () => {
+    const codexDir = join(tempHome, '.codex');
+    const configPath = join(codexDir, 'config.toml');
+    mkdirSync(codexDir, { recursive: true });
+
+    // First run creates the file with the actual snippet the codex write
+    // path produces for THIS mind script path. The second run must not
+    // mutate the file at all (idempotent) and must not create a backup
+    // sibling (no content-changing write occurred).
+    await runSetup('codex');
+    const first = readFileSync(configPath, 'utf-8');
+    const beforeBackups = readdirSync(codexDir).filter(n =>
+      n.startsWith('config.toml.bak.')
+    ).length;
+
+    await runSetup('codex');
+    const second = readFileSync(configPath, 'utf-8');
+
+    expect(second).toBe(first);
+    const afterBackups = readdirSync(codexDir).filter(n => n.startsWith('config.toml.bak.')).length;
+    expect(afterBackups).toBe(beforeBackups);
+
+    const stanzaCount = second.split('[mcp_servers.mind]').length - 1;
+    expect(stanzaCount).toBe(1);
+  });
+
+  test('aborts and does not overwrite a malformed config.toml', async () => {
+    const codexDir = join(tempHome, '.codex');
+    const configPath = join(codexDir, 'config.toml');
+    mkdirSync(codexDir, { recursive: true });
+    const original = '[mcp_servers.mind]\ncommand = "unterminated string\n';
+    writeFileSync(configPath, original);
+
+    let caught: Error | null = null;
+    try {
+      await runSetup('codex');
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(String(caught?.message ?? '')).toMatch(/malformed|toml|setup/i);
+
+    // Original file is unchanged.
+    expect(readFileSync(configPath, 'utf-8')).toBe(original);
+    // No backup created (we never reached the write step).
+    const entries = readdirSync(codexDir).filter(n => n.startsWith('config.toml.bak.'));
+    expect(entries).toEqual([]);
+  });
+
+  test('detects an existing codex integration from a TOML config with the mind stanza', async () => {
+    const { isAgentIntegrationDetected } = await import('../src/cli/setup');
+    const codexDir = join(tempHome, '.codex');
+    const configPath = join(codexDir, 'config.toml');
+    mkdirSync(codexDir, { recursive: true });
+    writeFileSync(
+      configPath,
+      '[mcp_servers.mind]\ncommand = "/usr/local/bin/mind"\nargs = ["mcp"]\n'
+    );
+
+    expect(isAgentIntegrationDetected('codex')).toBe(true);
+  });
+
+  test('does not detect a codex integration when only JSON-shaped mind keys are present', async () => {
+    // Regression guard: the detection path used to read the TOML file as
+    // JSON. A TOML stanza does NOT parse as JSON, and a JSON-shaped
+    // snippet does NOT parse as TOML. The detector must use the
+    // format-appropriate parser, not the JSON probe.
+    const { isAgentIntegrationDetected } = await import('../src/cli/setup');
+    const codexDir = join(tempHome, '.codex');
+    const configPath = join(codexDir, 'config.toml');
+    mkdirSync(codexDir, { recursive: true });
+    writeFileSync(configPath, '# TOML file with no mind stanza\n[other]\nkey = "value"\n');
+
+    expect(isAgentIntegrationDetected('codex')).toBe(false);
   });
 });

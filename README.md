@@ -465,11 +465,14 @@ Rollout policy:
 
 `mind setup opencode` is idempotent and non-destructive:
 
-- preserves unknown keys already present in `~/.config/opencode/opencode.json`
+- prefers `~/.config/opencode/opencode.jsonc` over `opencode.json` when both exist, and never creates `opencode.json` if `opencode.jsonc` is already present. New files are created as `opencode.jsonc` (the JSONC superset of JSON that OpenCode accepts natively).
+- preserves unknown keys already present in the chosen config file
 - configures `mcp.mind` as local command transport (`type: "local"`, `command: ["<path-to-mind>", "mcp"]`)
 - writes/refreshes `~/.config/opencode/instructions/mind-memory-protocol.md`
 - ensures that instruction file is present in OpenCode's `instructions` list
 - configures prudent L3 session/compaction automation by default and non-blocking, writing `~/.config/opencode/plugins/mind-automation.js` during setup
+
+> **Setup safety contract:** all setup flows that touch a user-owned JSON/JSONC config file (opencode, claude fallback, cursor, windsurf, gemini-cli, vscode, antigravity) now go through `src/setup/safe-config.ts`. Existing files are parsed strictly — a parse failure aborts the run with a clear error rather than overwriting the file with an empty default. Content-changing writes are preceded by a timestamped sibling backup (`.bak.YYYYMMDDTHHMMSSmmmZ`) and the new content is staged in a sibling `.tmp` file and renamed into place so a crash mid-write cannot leave a partial file. The same contract applies to `mind setup refresh`.
 
 `mind setup codex` keeps setup idempotent and writes local MCP command args in `~/.codex/config.toml`:
 

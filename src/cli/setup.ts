@@ -5,6 +5,15 @@ import * as path from 'path';
 
 import { DEFAULT_PORT } from '../config';
 import { getAgentConfig } from '../setup/agent-config';
+import {
+  MalformedConfigError,
+  readJsoncOrThrow,
+  readJsonOrThrow,
+  readTomlOrThrow,
+  safeWriteJson,
+  safeWriteJsonc,
+  safeWriteToml,
+} from '../setup/safe-config';
 import { ensureMindManagementSkill } from '../setup/skill-installation';
 export { buildOpenCodeAutomationPlugin } from '../setup/opencode-automation-plugin';
 export { getAgentCapabilities, getAgentCapabilityMatrix } from './capabilities';
@@ -141,18 +150,40 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+/**
+ * Read a strict JSON config file. Throws `MalformedConfigError` if the file
+ * exists but cannot be parsed. Returns `{}` for a missing file.
+ */
 function readJson(filePath: string): Record<string, unknown> {
-  if (!fs.existsSync(filePath)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+  return readJsonOrThrow(filePath);
 }
 
+/**
+ * Write a JSON config file atomically with a timestamped backup of the
+ * pre-write file. Aborts the calling setup run if the existing file is
+ * malformed.
+ */
 function writeJson(filePath: string, value: Record<string, unknown>): void {
-  ensureDir(path.dirname(filePath));
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+  safeWriteJson(filePath, value);
+}
+
+/**
+ * Read a JSONC config file (used for opencode.jsonc). Throws on malformed
+ * input. Returns `{}` for a missing file.
+ */
+function readJsonc(filePath: string): Record<string, unknown> {
+  return readJsoncOrThrow(filePath);
+}
+
+/**
+ * Write a JSONC config file with comment-preserving edit. Backups the
+ * pre-write file and refuses to overwrite a malformed one.
+ */
+function writeJsonc(
+  filePath: string,
+  updater: (current: Record<string, unknown>) => Record<string, unknown>
+): void {
+  safeWriteJsonc(filePath, updater);
 }
 
 function readText(filePath: string): string {
@@ -170,6 +201,61 @@ function jsonFileHasMindMcp(filePath: string): boolean {
   const mcpServers = config.mcpServers as Record<string, unknown> | undefined;
 
   return Boolean(mcp?.mind || mcpServers?.mind);
+}
+
+function tomlFileHasMindMcp(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+  // Parse-validates the file. Malformed input throws MalformedConfigError
+  // and the caller (isAgentIntegrationDetected / detection path) lets it
+  // propagate so the user sees a real parse-failure diagnostic instead of
+  // a silent false.
+  const config = readTomlOrThrow(filePath);
+  const mcpServers = config.mcp_servers as Record<string, unknown> | undefined;
+  return Boolean(mcpServers?.mind);
+}
+
+/**
+ * Format-aware detection dispatch. TOML agents (currently codex) must NOT
+ * pass through the JSON probe — TOML is not JSON and would always throw,
+ * producing misleading diagnostics. JSON/JSONC agents keep the existing
+ * JSON probe.
+ */
+function hasMindMcpInAgentConfig(cfg: { configPath: string; format: 'json' | 'toml' }): boolean {
+  if (cfg.format === 'toml') {
+    return tomlFileHasMindMcp(cfg.configPath);
+  }
+  return jsonFileHasMindMcp(cfg.configPath);
+}
+
+/**
+ * Find the byte range `[start, end)` of a TOML `[dotted.path]` table
+ * stanza inside `text`. Returns `null` if no matching table header exists.
+ *
+ * The end position is the start of the *next* table header line (including
+ * array-of-tables `[[...]]` headers) or end-of-file. The intent is to
+ * give the caller a single contiguous slice they can replace surgically
+ * while leaving preceding/following tables and their comments intact.
+ */
+function findTomlTableStanzaBounds(
+  text: string,
+  tablePath: string
+): { start: number; end: number } | null {
+  const escaped = tablePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const startPattern = new RegExp(`^\\[${escaped}\\]\\s*$`, 'm');
+  const startMatch = startPattern.exec(text);
+  if (!startMatch) {
+    return null;
+  }
+  const start = startMatch.index;
+  // Skip past the matched header line so endPattern cannot match the same
+  // table header again.
+  const endPattern = /^[\t ]*\[+[^\]]+\]+\s*$/gm;
+  endPattern.lastIndex = start + startMatch[0].length;
+  const endMatch = endPattern.exec(text);
+  const end = endMatch ? endMatch.index : text.length;
+  return { start, end };
 }
 
 function writeText(filePath: string, content: string): void {
@@ -849,6 +935,8 @@ export async function runSetup(
   let claudeCliSucceeded = false;
   let claudeFallbackWritePath: string | undefined;
 
+  const isJsonc = cfg.configPath.endsWith('.jsonc');
+
   if (cfg.format === 'json') {
     // For claude-code, try official CLI first before building merged config
     if (agent === 'claude-code' && !options.skipExternalCli) {
@@ -874,10 +962,19 @@ export async function runSetup(
     } else if (agent !== 'claude-code') {
       readPath = cfg.configPath;
     }
-    let merged = deepMerge(
-      readJson(readPath),
-      cfg.build(mcpUrl, mindPath) as Record<string, unknown>
-    );
+    let merged: Record<string, unknown>;
+    try {
+      merged = deepMerge(
+        isJsonc ? readJsonc(readPath) : readJson(readPath),
+        cfg.build(mcpUrl, mindPath) as Record<string, unknown>
+      );
+    } catch (err) {
+      if (err instanceof MalformedConfigError) {
+        console.error(`\n❌ ${err.message}`);
+        throw err;
+      }
+      throw err;
+    }
 
     // Delegate to agent-specific handlers
     if (agent === 'opencode') {
@@ -907,13 +1004,47 @@ export async function runSetup(
       // CLI handled MCP registration, nothing to write
     } else {
       const writePath = claudeFallbackWritePath ?? cfg.configPath;
-      writeJson(writePath, merged);
+      if (writePath.endsWith('.jsonc')) {
+        writeJsonc(writePath, current => deepMerge(current, merged));
+      } else {
+        writeJson(writePath, merged);
+      }
     }
   } else {
+    // TOML agents (currently codex). The contract is parse-safely +
+    // backup + atomic + surgical-edit. If a [mcp_servers.mind] stanza
+    // already exists and matches the freshly-built snippet, the write
+    // is a no-op (no backup, no rewrite). If the existing stanza
+    // differs, it is replaced in place, preserving unrelated tables
+    // and comments. If no mind stanza exists, the snippet is appended.
+    // Malformed existing TOML throws MalformedConfigError and the file
+    // is left byte-for-byte unchanged.
+    readTomlOrThrow(cfg.configPath);
+
     const current = readText(cfg.configPath);
     const snippet = cfg.build(mcpUrl, mindPath) as string;
-    const merged = current.includes('[mcp_servers.mind]') ? current : `${current}${snippet}`;
-    writeText(cfg.configPath, merged);
+    const bounds = findTomlTableStanzaBounds(current, 'mcp_servers.mind');
+
+    let nextText: string;
+    if (bounds === null) {
+      nextText = current.length === 0 ? snippet.replace(/^\n+/, '') : `${current}${snippet}`;
+    } else {
+      // The snippet carries a leading separator (`\n`) for the append
+      // path. When we slice the existing text, the separator lives
+      // BEFORE `bounds.start` and is therefore NOT part of the slice.
+      // Normalize both sides by stripping leading whitespace before we
+      // decide whether a rewrite would change anything.
+      const existingStanza = current.slice(bounds.start, bounds.end);
+      const normalize = (s: string): string => s.replace(/^\s+/, '');
+      nextText =
+        normalize(existingStanza) === normalize(snippet)
+          ? current
+          : current.slice(0, bounds.start) + snippet + current.slice(bounds.end);
+    }
+
+    if (nextText !== current) {
+      safeWriteToml(cfg.configPath, nextText);
+    }
 
     if (agent === 'codex') {
       await setupCodex(cfg.configPath, snippet);
@@ -988,7 +1119,7 @@ export function isAgentIntegrationDetected(agent: SupportedAgent): boolean {
   const home = getHomeDir();
   const cfg = getAgentConfig(agent);
 
-  if (jsonFileHasMindMcp(cfg.configPath) || hasAgentSkillSignal(agent)) {
+  if (hasMindMcpInAgentConfig(cfg) || hasAgentSkillSignal(agent)) {
     return true;
   }
 
