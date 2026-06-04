@@ -4,14 +4,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { expect, test, beforeEach, afterEach, describe } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
 import type { MindStore } from '../src/store/mind-store';
 import { initMindDir, loadConfig, saveConfig } from '../src/sync/config-file';
 import { getSyncWatcherStatus } from '../src/sync/detached-watcher';
 import { FileWatcher } from '../src/sync/file-watcher';
 import { parseFrontmatter } from '../src/sync/frontmatter';
-import { getSyncBasePath, getSpaceSyncDir } from '../src/sync/normalize';
+import { getSpaceSyncDir, getSyncBasePath } from '../src/sync/normalize';
 
 import { createTestStore } from './mocks/test-store';
 
@@ -60,7 +60,7 @@ describe('A. sync enable --path flag support', () => {
     saveConfig(basePath, config);
 
     // Verify sync directory is created under custom path
-    const syncDir = getSpaceSyncDir(customPath, 'projects/test');
+    const syncDir = getSpaceSyncDir(customPath, 'projects/test', store);
     expect(existsSync(syncDir)).toBe(false); // Not yet exported
 
     // Export files
@@ -173,7 +173,7 @@ describe('4. links_to import creates bidirectional links', () => {
     const fileSync = new FileSyncService(store);
     await fileSync.exportSpaceToFiles('projects/test', basePath);
 
-    const syncDir = getSpaceSyncDir(projectRoot, 'projects/test');
+    const syncDir = getSpaceSyncDir(projectRoot, 'projects/test', store);
     const exportedFile = readFileSync(join(syncDir, 'memory-a.md'), 'utf-8');
     const { frontmatter } = parseFrontmatter(exportedFile);
 
@@ -200,7 +200,7 @@ describe('4. links_to import creates bidirectional links', () => {
     const fileSync = new FileSyncService(store);
     await fileSync.exportSpaceToFiles('projects/test', basePath);
 
-    const syncDir = getSpaceSyncDir(projectRoot, 'projects/test');
+    const syncDir = getSpaceSyncDir(projectRoot, 'projects/test', store);
     const exportedFile = readFileSync(join(syncDir, 'memory-a.md'), 'utf-8');
     const { frontmatter } = parseFrontmatter(exportedFile);
 

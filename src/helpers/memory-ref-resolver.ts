@@ -4,7 +4,7 @@ export function resolveRefWithFallback(
   store: MindStore,
   ref: string,
   fallbackSpace?: string
-): { id: number; space: string; name: string } {
+): { id: string; space: string; name: string } {
   const parsed = store.resolveMemoryRef(ref);
 
   if (parsed) {

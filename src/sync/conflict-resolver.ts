@@ -28,7 +28,7 @@ function parseComparableTimestampEpoch(value: string | null | undefined): number
 import type { ConflictResolution } from './types';
 
 export interface DBMemory {
-  id: number;
+  id: string;
   name: string;
   content: string;
   changed_at: string | null;
@@ -48,7 +48,7 @@ export interface FileFrontmatter {
 }
 
 export interface Conflict {
-  memoryId: number;
+  memoryId: string;
   memoryName: string;
   space: string;
   dbMemory: DBMemory | null; // null if doesn't exist in DB

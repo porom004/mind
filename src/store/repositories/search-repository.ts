@@ -40,7 +40,7 @@ export interface SearchRepository {
     space: string,
     opts?: { limit?: number; maxLimit?: number }
   ): {
-    nodes: { id: number; name: string; tier: Tier; links_to: number[]; linked_by: number[] }[];
+    nodes: { id: string; name: string; tier: Tier; links_to: string[]; linked_by: string[] }[];
     meta: {
       total_nodes: number;
       returned_nodes: number;
@@ -52,7 +52,7 @@ export interface SearchRepository {
   };
 }
 
-function getTagsForMemory(db: Database, memoryId: number): string[] {
+function getTagsForMemory(db: Database, memoryId: string): string[] {
   const rows = db.query('SELECT tag FROM memory_tags WHERE memory_id = ?').all(memoryId) as {
     tag: string;
   }[];
@@ -72,16 +72,17 @@ export function createSearchRepository(
     if (!sanitized) return [];
 
     let sql = `
-            SELECT m.id, m.space_name, m.name, m.content, m.tier, m.pinned,
+            SELECT m.id, s.name as space_name, m.name, m.content, m.tier, m.pinned,
                    m.created_at, m.updated_at, m.changed_at, fts.rank
             FROM memories_fts fts
-            JOIN memories m ON m.id = fts.rowid
+            JOIN memories m ON m.fts_id = fts.rowid
+            JOIN spaces s ON s.id = m.space_id
             WHERE memories_fts MATCH ?
         `;
     const params: any[] = [sanitized];
 
     if (filter?.space) {
-      sql += ' AND m.space_name = ?';
+      sql += ' AND s.name = ?';
       params.push(filter.space);
     }
     if (filter?.tier) {
@@ -113,8 +114,12 @@ export function createSearchRepository(
         return values.map(value => (value - min) / (max - min));
       };
 
-      const getEmbeddingForId = (id: number): Float32Array | null => {
-        const row = db.query('SELECT embedding FROM memories WHERE id = ?').get(id) as any;
+      const getEmbeddingForId = (id: string): Float32Array | null => {
+        const row = db
+          .query(
+            'SELECT embedding FROM memories m JOIN spaces s ON s.id = m.space_id WHERE m.id = ?'
+          )
+          .get(id) as any;
         return row?.embedding ? blobToVector(row.embedding) : null;
       };
 
@@ -167,10 +172,10 @@ export function createSearchRepository(
       // FTS returned nothing — fall back to pure semantic search across all candidates
       const SEMANTIC_FALLBACK_THRESHOLD = 0.3;
       let candSql =
-        'SELECT id, space_name, name, content, tier, pinned, created_at, updated_at, changed_at FROM memories WHERE 1=1';
+        'SELECT m.id, s.name as space_name, m.name, m.content, m.tier, m.pinned, m.created_at, m.updated_at, m.changed_at FROM memories m JOIN spaces s ON s.id = m.space_id WHERE 1=1';
       const candParams: any[] = [];
       if (filter?.space) {
-        candSql += ' AND space_name = ?';
+        candSql += ' AND s.name = ?';
         candParams.push(filter.space);
       }
       if (filter?.tier) {
@@ -259,16 +264,17 @@ export function createSearchRepository(
     if (!sanitized) return [];
 
     let sql = `
-            SELECT m.id, m.space_name, m.name, m.content, m.tier, m.pinned,
+            SELECT m.id, s.name as space_name, m.name, m.content, m.tier, m.pinned,
                    m.created_at, m.updated_at, m.changed_at, fts.rank
             FROM memories_fts fts
-            JOIN memories m ON m.id = fts.rowid
+            JOIN memories m ON m.fts_id = fts.rowid
+            JOIN spaces s ON s.id = m.space_id
             WHERE memories_fts MATCH ?
         `;
     const params: any[] = [sanitized];
 
     if (filter?.space) {
-      sql += ' AND m.space_name = ?';
+      sql += ' AND s.name = ?';
       params.push(filter.space);
     }
     if (filter?.tier) {
@@ -313,7 +319,7 @@ export function createSearchRepository(
     const likePattern = `%${query}%`;
 
     let sql = `
-            SELECT m.id, m.space_name, m.name, m.content, m.tier, m.pinned,
+            SELECT m.id, s.name as space_name, m.name, m.content, m.tier, m.pinned,
                    m.created_at, m.updated_at, m.changed_at
             FROM memories m
             WHERE (m.name LIKE ? OR m.content LIKE ?)
@@ -321,7 +327,7 @@ export function createSearchRepository(
     const params: any[] = [likePattern, likePattern];
 
     if (filter?.space) {
-      sql += ' AND m.space_name = ?';
+      sql += ' AND s.name = ?';
       params.push(filter.space);
     }
     if (filter?.tier) {
@@ -329,7 +335,7 @@ export function createSearchRepository(
       params.push(filter.tier);
     }
 
-    sql += ' ORDER BY m.changed_at DESC, m.id DESC';
+    sql += ' ORDER BY m.changed_at DESC, m.rowid DESC';
 
     let rows = db.query(sql).all(...params) as any[];
 
@@ -367,10 +373,10 @@ export function createSearchRepository(
     const SEMANTIC_FALLBACK_THRESHOLD = 0.3;
 
     let candSql =
-      'SELECT id, space_name, name, content, tier, pinned, created_at, updated_at, changed_at FROM memories WHERE 1=1';
+      'SELECT m.id, s.name as space_name, m.name, m.content, m.tier, m.pinned, m.created_at, m.updated_at, m.changed_at FROM memories m JOIN spaces s ON s.id = m.space_id WHERE 1=1';
     const candParams: any[] = [];
     if (filter?.space) {
-      candSql += ' AND space_name = ?';
+      candSql += ' AND s.name = ?';
       candParams.push(filter.space);
     }
     if (filter?.tier) {
@@ -383,8 +389,10 @@ export function createSearchRepository(
       candidates = candidates.filter(r => getTagsForMemory(db, r.id).includes(normalizedTag));
     }
 
-    const getEmbeddingForId = (id: number): Float32Array | null => {
-      const row = db.query('SELECT embedding FROM memories WHERE id = ?').get(id) as any;
+    const getEmbeddingForId = (id: string): Float32Array | null => {
+      const row = db
+        .query('SELECT embedding FROM memories m JOIN spaces s ON s.id = m.space_id WHERE m.id = ?')
+        .get(id) as any;
       return row?.embedding ? blobToVector(row.embedding) : null;
     };
 
@@ -415,7 +423,7 @@ export function createSearchRepository(
 
   function queryMemories(filter?: MemoryQueryFilter): MemorySummary[] {
     let sql =
-      'SELECT m.id, m.space_name, m.name, m.tier, m.pinned, m.access_count, m.created_at, m.updated_at, m.changed_at FROM memories m';
+      'SELECT m.id, s.name as space_name, m.space_id, m.name, m.tier, m.pinned, m.access_count, m.created_at, m.updated_at, m.changed_at FROM memories m JOIN spaces s ON s.id = m.space_id';
     const joinParams: any[] = [];
     const conditions: string[] = [];
     const whereParams: any[] = [];
@@ -426,7 +434,7 @@ export function createSearchRepository(
     }
 
     if (filter?.space) {
-      conditions.push('m.space_name = ?');
+      conditions.push('s.name = ?');
       whereParams.push(filter.space);
     }
 
@@ -452,11 +460,12 @@ export function createSearchRepository(
     const limit = Math.max(1, Math.min(500, filter?.limit ?? 25));
     const offset = Math.max(0, filter?.offset ?? 0);
 
-    sql += ' ORDER BY m.changed_at DESC, m.id DESC LIMIT ? OFFSET ?';
+    sql += ' ORDER BY m.changed_at DESC, m.rowid DESC LIMIT ? OFFSET ?';
     const rows = db.query(sql).all(...joinParams, ...whereParams, limit, offset) as any[];
 
     return rows.map(r => ({
       id: r.id,
+      space_id: r.space_id,
       space_name: r.space_name,
       name: r.name,
       tier: r.tier as Tier,
@@ -476,7 +485,7 @@ export function createSearchRepository(
     from?: string;
     to?: string;
   }): Promise<number> {
-    let sql = 'SELECT COUNT(*) as count FROM memories m';
+    let sql = 'SELECT COUNT(*) as count FROM memories m JOIN spaces s ON s.id = m.space_id';
     const joinParams: any[] = [];
     const conditions: string[] = [];
     const whereParams: any[] = [];
@@ -487,7 +496,7 @@ export function createSearchRepository(
     }
 
     if (filter?.space) {
-      conditions.push('m.space_name = ?');
+      conditions.push('s.name = ?');
       whereParams.push(filter.space);
     }
 
@@ -518,7 +527,7 @@ export function createSearchRepository(
     space: string,
     opts?: { limit?: number; maxLimit?: number }
   ): {
-    nodes: { id: number; name: string; tier: Tier; links_to: number[]; linked_by: number[] }[];
+    nodes: { id: string; name: string; tier: Tier; links_to: string[]; linked_by: string[] }[];
     meta: {
       total_nodes: number;
       returned_nodes: number;
@@ -538,7 +547,9 @@ export function createSearchRepository(
     const appliedLimit = Math.min(normalizedRequestedLimit, Math.max(1, Math.trunc(maxLimit)));
 
     const totalRow = db
-      .query('SELECT COUNT(*) as total FROM memories WHERE space_name = ? AND tier < 4')
+      .query(
+        'SELECT COUNT(*) as total FROM memories m JOIN spaces s ON s.id = m.space_id WHERE s.name = ? AND m.tier < 4'
+      )
       .get(space) as {
       total: number;
     };
@@ -546,17 +557,18 @@ export function createSearchRepository(
 
     const rows = db
       .query(
-        `SELECT id, name, tier
-                 FROM memories
-                 WHERE space_name = ? AND tier < 4
-                 ORDER BY tier ASC, access_count DESC, name ASC
+        `SELECT m.id, m.name, m.tier
+                 FROM memories m
+                 JOIN spaces s ON s.id = m.space_id
+                 WHERE s.name = ? AND m.tier < 4
+                 ORDER BY m.tier ASC, m.access_count DESC, m.name ASC
                  LIMIT ?`
       )
-      .all(space, appliedLimit) as { id: number; name: string; tier: Tier }[];
+      .all(space, appliedLimit) as { id: string; name: string; tier: Tier }[];
 
     const nodeMap = new Map<
-      number,
-      { id: number; name: string; tier: Tier; links_to: number[]; linked_by: number[] }
+      string,
+      { id: string; name: string; tier: Tier; links_to: string[]; linked_by: string[] }
     >(
       rows.map(row => [
         row.id,
@@ -574,12 +586,14 @@ export function createSearchRepository(
           `SELECT l.source_id, l.target_id
                      FROM links l
                      JOIN memories sm ON sm.id = l.source_id
+                     JOIN spaces ss ON ss.id = sm.space_id
                      JOIN memories tm ON tm.id = l.target_id
-                     WHERE sm.space_name = ?
-                       AND tm.space_name = ?
+                     JOIN spaces ts ON ts.id = tm.space_id
+                     WHERE ss.name = ?
+                       AND ts.name = ?
                        AND (l.source_id IN (${placeholders}) OR l.target_id IN (${placeholders}))`
         )
-        .all(...params) as { source_id: number; target_id: number }[];
+        .all(...params) as { source_id: string; target_id: string }[];
 
       for (const linkRow of linkRows) {
         const sourceNode = nodeMap.get(linkRow.source_id);
@@ -590,8 +604,8 @@ export function createSearchRepository(
       }
 
       for (const node of nodeMap.values()) {
-        node.links_to.sort((a, b) => a - b);
-        node.linked_by.sort((a, b) => a - b);
+        node.links_to.sort();
+        node.linked_by.sort();
       }
     }
 

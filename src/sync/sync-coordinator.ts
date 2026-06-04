@@ -35,7 +35,7 @@ export class SyncCoordinator {
     const spaceConfig = config?.spaces?.[space];
     if (!spaceConfig?.enabled) return null;
 
-    const spaceDir = getSpaceDir(basePath, space);
+    const spaceDir = getSpaceDir(basePath, space, this.store);
     this.writeDbOriginLock(space);
     const result = await new FileSyncService(this.store, {
       conflictResolution: spaceConfig.conflictResolution,
@@ -75,7 +75,7 @@ export class SyncCoordinator {
   }
 
   writeDbOriginLock(space: string): void {
-    const spaceDir = getSpaceDir(getSyncBasePath(this.projectRoot), space);
+    const spaceDir = getSpaceDir(getSyncBasePath(this.projectRoot), space, this.store);
     const metadataDir = join(spaceDir, LOCK_DIR);
     mkdirSync(metadataDir, { recursive: true });
     writeFileSync(
@@ -87,7 +87,7 @@ export class SyncCoordinator {
 
   isDbOriginLocked(space: string): boolean {
     const lockPath = join(
-      getSpaceDir(getSyncBasePath(this.projectRoot), space),
+      getSpaceDir(getSyncBasePath(this.projectRoot), space, this.store),
       LOCK_DIR,
       LOCK_FILE
     );

@@ -64,7 +64,7 @@ describe('sync export', () => {
     expect(result.errors).toHaveLength(0);
 
     // Verify: check file exists in the computed space dir
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
     const filePath = join(spaceDir, 'test-memory.md');
     expect(existsSync(filePath)).toBe(true);
 
@@ -105,7 +105,7 @@ describe('sync export', () => {
     expect(result.failed).toBe(0);
 
     // Verify files exist in the computed space dir
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
     expect(existsSync(join(spaceDir, 'memory-one.md'))).toBe(true);
     expect(existsSync(join(spaceDir, 'memory-two.md'))).toBe(true);
     expect(existsSync(join(spaceDir, 'memory-three.md'))).toBe(true);
@@ -131,7 +131,7 @@ describe('sync export', () => {
     await syncService.exportSpaceToFiles('projects/test', basePath);
 
     // Verify
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
     const filePath = join(spaceDir, 'source-memory.md');
     const fileContent = readFileSync(filePath, 'utf-8');
     const { frontmatter } = parseFrontmatter(fileContent);
@@ -160,7 +160,7 @@ describe('sync export', () => {
     await syncService.exportSpaceToFiles('projects/test', basePath);
 
     // Verify: tags should be a YAML array [item1, item2, item3]
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
     const filePath = join(spaceDir, 'tagged-memory.md');
     const fileContent = readFileSync(filePath, 'utf-8');
     const { frontmatter } = parseFrontmatter(fileContent);
@@ -192,7 +192,7 @@ describe('sync export', () => {
     await syncService.exportSpaceToFiles('projects/test', basePath);
 
     // Verify: links_to should contain space:name format for cross-space links
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
     const filePath = join(spaceDir, 'local-memory.md');
     const fileContent = readFileSync(filePath, 'utf-8');
     const { frontmatter } = parseFrontmatter(fileContent);
@@ -214,7 +214,7 @@ describe('sync export', () => {
 
     // Verify
     expect(result.exported).toBe(1);
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
     const filePath = join(spaceDir, 'empty-memory.md');
     const fileContent = readFileSync(filePath, 'utf-8');
     const { frontmatter, content } = parseFrontmatter(fileContent);
@@ -236,7 +236,7 @@ describe('sync export', () => {
     await syncService.exportSpaceToFiles('projects/test', basePath);
 
     // Verify: read file and parse
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
     const filePath = join(spaceDir, 'roundtrip-memory.md');
     const fileContent = readFileSync(filePath, 'utf-8');
     const { frontmatter, content } = parseFrontmatter(fileContent);
@@ -250,7 +250,7 @@ describe('sync export', () => {
   test('generateMarkdown produces parseable output', () => {
     // Test the frontmatter module directly
     const input = {
-      id: 123,
+      id: '123',
       space: 'projects/test',
       name: 'test-memory',
       tier: 1,
@@ -264,7 +264,7 @@ describe('sync export', () => {
     const markdown = generateMarkdown(input, '**What**: test content\n**Why**: testing');
     const { frontmatter, content } = parseFrontmatter(markdown);
 
-    expect(frontmatter.id).toBe(123);
+    expect(frontmatter.id).toBe('123');
     expect(frontmatter.space).toBe('projects/test');
     expect(frontmatter.name).toBe('test-memory');
     expect(frontmatter.tier).toBe(1);
@@ -288,7 +288,7 @@ describe('sync export', () => {
     await syncService.exportSpaceToFiles('projects/test', basePath);
 
     // Verify
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
     const filePath = join(spaceDir, 'ws-test.md');
     const fileContent = readFileSync(filePath, 'utf-8');
     const lines = fileContent.split('\n');
@@ -355,7 +355,7 @@ describe('export to non-existent directory', () => {
     await syncService.exportSpaceToFiles('projects/test', basePath);
 
     // Verify directory was created
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
     expect(existsSync(spaceDir)).toBe(true);
 
     // Cleanup

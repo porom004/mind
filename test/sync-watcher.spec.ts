@@ -36,7 +36,7 @@ beforeEach(async () => {
 
   // Create the space sync directory
   const basePath = getSyncBasePath(projectRoot);
-  syncDir = getSpaceDir(basePath, 'projects/test');
+  syncDir = getSpaceDir(basePath, 'projects/test', store);
   mkdirSync(syncDir, { recursive: true });
 
   // Configure sync in file-based config
@@ -442,7 +442,7 @@ describe('import pipeline', () => {
 
     const filePath = join(syncDir, 'full-featured.md');
     const fm = {
-      id: 300,
+      id: '300',
       space: 'projects/test',
       name: 'full-featured-memory',
       tier: 1,

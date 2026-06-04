@@ -10,10 +10,7 @@ import {
   SESSION_SUMMARY_TIER,
 } from '../helpers/session-summary';
 import type { MindStore } from '../store/mind-store';
-
-function now(): string {
-  return new Date().toISOString().replace('T', ' ').replace('Z', '').split('.')[0]!;
-}
+import { now } from '../store/shared';
 
 export interface CompleteCheckpointResult {
   sessionMemory: {
@@ -34,7 +31,7 @@ export interface CompleteCheckpointResult {
 export async function completeCheckpoint(
   store: MindStore,
   space: string,
-  checkpointMemoryId: number,
+  checkpointMemoryId: string,
   summary: string
 ): Promise<CompleteCheckpointResult> {
   // Get full checkpoint memory

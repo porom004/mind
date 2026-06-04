@@ -1,6 +1,7 @@
 // ── Shared helpers barrel export ──
 
+export { normalizeDateBound, now } from './datetime-helpers';
 export { FtsHelper } from './fts-helpers';
-export { now, normalizeDateBound } from './datetime-helpers';
 export { sanitizeFtsQuery } from './query-sanitization';
-export { requireSpace, requireMemory, type MemoryRow } from './validation-helpers';
+export { generateUuid } from './uuid-helpers';
+export { requireMemory, requireSpace, type MemoryRow } from './validation-helpers';

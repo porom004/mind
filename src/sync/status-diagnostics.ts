@@ -5,7 +5,7 @@ import type { MindStore } from '../store/mind-store';
 import type { Memory, MemorySummary } from '../types';
 
 import { parseFrontmatter } from './frontmatter';
-import { evaluateSyncState, hashFrontmatterAndContent, readManifestV2 } from './manifest';
+import { evaluateSyncState, hashFrontmatterAndContent, readManifestV1 } from './manifest';
 import { getSpaceDir } from './normalize';
 import type { SyncStatusDiagnostics } from './types';
 
@@ -14,18 +14,18 @@ export function evaluateSyncStatus(
   space: string,
   syncBasePath: string
 ): SyncStatusDiagnostics {
-  const spaceDir = getSpaceDir(syncBasePath, space);
-  const manifest = readManifestV2(spaceDir, space);
+  const spaceDir = getSpaceDir(syncBasePath, space, store);
+  const spaceInfo = store.getSpace(space);
+  const spaceId = spaceInfo?.id ?? '';
+  const manifest = readManifestV1(spaceDir, space, spaceId);
   const files = listMarkdownFiles(spaceDir);
   const memories = listAllSpaceMemories(store, space);
-  const memoryById = new Map<number, Memory>();
-  const memoryByName = new Map<string, Memory>();
+  const memoryById = new Map<string, Memory>();
 
   for (const summary of memories) {
     const memory = store.getMemoryById(summary.id);
     if (!memory) continue;
     memoryById.set(memory.id, memory);
-    memoryByName.set(memory.name, memory);
   }
 
   const diagnostics: SyncStatusDiagnostics = {
@@ -45,15 +45,13 @@ export function evaluateSyncStatus(
     lastAutoExport: manifest.last_auto_export ?? null,
   };
 
-  for (const entry of Object.values(manifest.entries)) {
+  for (const [_entryKey, entry] of Object.entries(manifest.entries)) {
     if (entry.deleted) {
       diagnostics.counts.tombstones++;
       continue;
     }
 
-    const memory =
-      (entry.memory_id ? memoryById.get(entry.memory_id) : undefined) ??
-      memoryByName.get(entry.memory_name);
+    const memory = memoryById.get(entry.memory_id);
     const filePath = join(spaceDir, entry.path);
     const fileHash = readManagedFileHash(filePath, diagnostics);
     const dbHash = memory ? hashDbMemory(store, memory) : null;

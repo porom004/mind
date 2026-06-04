@@ -26,8 +26,8 @@ import {
 } from './features/memory-panel/interactions.js';
 import { buildAppUrl, parseAppRoute } from './features/routing/routing.js';
 
-/** @typedef {{ id:number, name:string, tier:1|2|3, pinned:boolean, access_count:number, tags?:string[] }} MemorySummary */
-/** @typedef {{ id:number, space_name:string, name:string, content:string, tier:1|2|3, pinned:boolean, tags?:string[] }} Memory */
+/** @typedef {{ id:string, name:string, tier:1|2|3, pinned:boolean, access_count:number, tags?:string[] }} MemorySummary */
+/** @typedef {{ id:string, space_name:string, name:string, content:string, tier:1|2|3, pinned:boolean, tags?:string[] }} Memory */
 /** @typedef {{ name:string, description?:string, tags?:string[], memory_count?:number, hidden?:boolean }} Space */
 /** @typedef {{ logs: any[], total: number, limit: number, offset: number }} LogsResult */
 

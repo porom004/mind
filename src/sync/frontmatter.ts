@@ -47,7 +47,7 @@ export function parseFrontmatter(markdown: string): ParsedMarkdown {
  */
 export function generateMarkdown(
   frontmatterData: {
-    id: number;
+    id: string;
     space: string;
     name: string;
     tier: number;

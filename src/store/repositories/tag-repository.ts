@@ -5,9 +5,9 @@ import type { Database } from 'bun:sqlite';
 import { normalizeTag, normalizeTags } from '../../helpers/tags';
 
 export interface TagRepository {
-  addMemoryTag(memoryId: number, tag: string): void;
-  removeMemoryTag(memoryId: number, tag: string): void;
-  setMemoryTags(memoryId: number, tags: string[]): void;
+  addMemoryTag(memoryId: string, tag: string): void;
+  removeMemoryTag(memoryId: string, tag: string): void;
+  setMemoryTags(memoryId: string, tags: string[]): void;
   listAllTags(): {
     spaces: { tag: string; count: number }[];
     memories: { tag: string; count: number }[];
@@ -15,7 +15,7 @@ export interface TagRepository {
 }
 
 export function createTagRepository(db: Database): TagRepository {
-  function addMemoryTag(memoryId: number, tag: string): void {
+  function addMemoryTag(memoryId: string, tag: string): void {
     const normalized = normalizeTag(tag);
     db.run('INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?, ?)', [
       memoryId,
@@ -23,12 +23,12 @@ export function createTagRepository(db: Database): TagRepository {
     ]);
   }
 
-  function removeMemoryTag(memoryId: number, tag: string): void {
+  function removeMemoryTag(memoryId: string, tag: string): void {
     const normalized = normalizeTag(tag);
     db.run('DELETE FROM memory_tags WHERE memory_id = ? AND tag = ?', [memoryId, normalized]);
   }
 
-  function setMemoryTags(memoryId: number, tags: string[]): void {
+  function setMemoryTags(memoryId: string, tags: string[]): void {
     const transaction = db.transaction(() => {
       // Clear existing tags
       db.run('DELETE FROM memory_tags WHERE memory_id = ?', [memoryId]);

@@ -55,6 +55,7 @@ Example:
   run `mind setup` after `mind update`, then run
   `mind migrate sessions projects/<repo> --dry-run` first and
   `mind migrate sessions projects/<repo>` after you review the dry run.
+- **UUID Primary IDs migration**: Converted `spaces` and `memories` from INTEGER AUTOINCREMENT to UUID TEXT primary keys. Added `memories.fts_id` (INTEGER) as local surrogate for SQLite FTS5 rowid. Added `memories.space_id` (TEXT FK) normalizing the relationship to `spaces`. Added `fts_id_sequence` table for transactional ID assignment. Migrated autosync to manifest v1 with UUID entries and space UUID directories. MCP/CLI public contracts preserved (name-based). Schema version 7 → 8.
 
 ### Fixed
 

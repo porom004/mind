@@ -5,6 +5,7 @@ export interface Space {
   description: string;
   tags: string[];
   hidden: boolean;
+  id?: string; // UUID, optional for backward compat in public APIs
   created_at: string;
   updated_at: string;
 }
@@ -18,12 +19,14 @@ export interface SpaceSummary {
 }
 
 export interface Memory {
-  id: number;
+  id: string; // UUID primary key
   space_name: string;
+  space_id: string; // UUID of parent space
   name: string;
   content: string;
   tier: Tier;
   pinned: boolean;
+  fts_id?: number; // Integer surrogate for FTS5 rowid (optional, not present in all public-facing contexts)
   access_count: number;
   last_accessed_at: string | null;
   embedding: Float32Array | null;
@@ -34,8 +37,9 @@ export interface Memory {
 }
 
 export interface MemorySummary {
-  id: number;
+  id: string; // UUID
   space_name: string;
+  space_id: string; // UUID of parent space
   name: string;
   tier: Tier;
   pinned: boolean;
@@ -47,8 +51,8 @@ export interface MemorySummary {
 }
 
 export interface Link {
-  source_id: number;
-  target_id: number;
+  source_id: string;
+  target_id: string;
   source_name: string;
   source_space: string;
   target_name: string;
@@ -66,7 +70,7 @@ export interface TierChange {
 }
 
 export interface HotMemorySummary {
-  id: number;
+  id: string;
   name: string;
   tier: Tier;
   tags: string[];
@@ -81,7 +85,7 @@ export interface SearchFilter {
 }
 
 export interface SearchResult {
-  id: number;
+  id: string;
   space_name: string;
   name: string;
   content: string;
@@ -118,11 +122,11 @@ export interface StatusResult {
 }
 
 export interface GraphNodeSummary {
-  id: number;
+  id: string;
   name: string;
   tier: Tier;
-  links_to: number[];
-  linked_by: number[];
+  links_to: string[];
+  linked_by: string[];
 }
 
 export interface SpaceGraphResult {
@@ -158,7 +162,7 @@ export interface CallerInfo {
 }
 
 export interface LogEntry {
-  id: number;
+  id: number; // KEEP numeric — logs.id is unchanged
   source: LogSource;
   operation: string;
   level: LogLevel;

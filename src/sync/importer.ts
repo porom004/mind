@@ -162,7 +162,7 @@ async function applyExistingMemoryUpdate(
 async function createLinksTo(
   store: MindStore,
   space: string,
-  sourceId: number,
+  sourceId: string,
   linksTo: string[],
   filePath: string
 ): Promise<{ created: number; failed: number; errors: string[] }> {
@@ -189,7 +189,7 @@ async function createLinksTo(
   return { created, failed, errors };
 }
 
-function resolveMemoryRef(store: MindStore, space: string, ref: string): number | null {
+function resolveMemoryRef(store: MindStore, space: string, ref: string): string | null {
   const parsed = store.resolveMemoryRef(ref);
   const target = parsed ? store.getMemory(parsed.space, parsed.name) : store.getMemory(space, ref);
   return target?.id ?? null;

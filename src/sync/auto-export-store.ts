@@ -32,7 +32,7 @@ async function exportAfter<T>(
   return result;
 }
 
-function memorySpace(store: MindStore, id: number): string | null {
+function memorySpace(store: MindStore, id: string): string | null {
   return store.getMemoryById(id)?.space_name ?? null;
 }
 

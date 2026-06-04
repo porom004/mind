@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -11,7 +9,6 @@ import {
 
 import { createLogEntry } from '../helpers/logger';
 import type { MindStore } from '../store/mind-store';
-import { AutoSyncService as _AutoSyncService } from '../sync';
 import { withAutoExport } from '../sync/auto-export-store';
 
 import { zodToJsonSchema } from './helpers/json-schema';
@@ -214,7 +211,7 @@ export async function startMcpHttpServer(
           let transport: WebStandardStreamableHTTPServerTransport;
 
           transport = new WebStandardStreamableHTTPServerTransport({
-            sessionIdGenerator: () => randomUUID(),
+            sessionIdGenerator: () => crypto.randomUUID(),
             onsessioninitialized: id => {
               sessions.set(id, { server, transport });
             },

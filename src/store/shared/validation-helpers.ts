@@ -3,7 +3,9 @@
 import type { Database } from 'bun:sqlite';
 
 export interface MemoryRow {
-  id: number;
+  space_id: string;
+  fts_id: number;
+  id: string;
   space_name: string;
   name: string;
   content: string;
@@ -32,7 +34,7 @@ export function requireSpace(db: Database, name: string): void {
  * @throws Error if the memory does not exist
  * @returns the memory row
  */
-export function requireMemory(db: Database, id: number): MemoryRow {
+export function requireMemory(db: Database, id: string): MemoryRow {
   const row = db.query('SELECT * FROM memories WHERE id = ?').get(id) as MemoryRow | undefined;
   if (!row)
     throw new Error(

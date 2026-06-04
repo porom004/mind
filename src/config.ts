@@ -1,6 +1,6 @@
 import * as path from 'path';
 
-const repoRoot = path.join(import.meta.dir, '..', '..');
+const repoRoot = path.join(import.meta.dir, '..');
 const dataDir = process.env.MIND_DATA_DIR ?? 'data';
 
 const resolvedDataDir = path.isAbsolute(dataDir) ? dataDir : path.join(repoRoot, dataDir);

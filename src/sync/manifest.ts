@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { basename } from 'path';
 
-import type { Frontmatter, SpaceManifest, SpaceManifestV2, SpaceManifestV2Entry } from './types';
+import type { Frontmatter, SpaceManifestV1, SpaceManifestV1Entry } from './types';
 
 export type ManifestSyncState =
   | { kind: 'no-op' }
@@ -104,32 +104,6 @@ export function manifestPath(spaceDir: string): string {
   return `${spaceDir}/manifest.json`;
 }
 
-export function emptyManifest(space: string): SpaceManifestV2 {
-  return { version: 2, space, manifest_updated_at_utc: utcNow(), entries: {} };
-}
-
-export function readManifestV2(spaceDir: string, space: string): SpaceManifestV2 {
-  const path = manifestPath(spaceDir);
-  if (!existsSync(path)) return emptyManifest(space);
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as SpaceManifest | SpaceManifestV2;
-    if ('version' in parsed && parsed.version === 2 && 'entries' in parsed) {
-      return { ...parsed, entries: parsed.entries ?? {} } as SpaceManifestV2;
-    }
-    return emptyManifest((parsed as SpaceManifest).space ?? space);
-  } catch {
-    return emptyManifest(space);
-  }
-}
-
-export function writeManifestV2(spaceDir: string, manifest: SpaceManifestV2): void {
-  writeFileSync(
-    manifestPath(spaceDir),
-    JSON.stringify({ ...manifest, manifest_updated_at_utc: utcNow() }, null, 2),
-    'utf-8'
-  );
-}
-
 export function fileMtimeUtc(filePath: string): string | null {
   try {
     return statSync(filePath).mtime.toISOString();
@@ -138,33 +112,12 @@ export function fileMtimeUtc(filePath: string): string | null {
   }
 }
 
-export function entryKey(memoryId: number | undefined, memoryName: string): string {
-  return memoryId ? `id:${memoryId}` : `name:${sha256(memoryName).slice(0, 12)}`;
-}
-
-export function buildEntry(args: {
-  memoryId: number;
-  memoryName: string;
-  relativePath: string;
-  contentHash: string;
-  metadataHash: string;
-  dbChangedAt: string | null;
-  fileChangedAt: string | null;
-  filePath: string;
-}): SpaceManifestV2Entry {
-  const now = utcNow();
-  return {
-    memory_name: args.memoryName,
-    path: basename(args.relativePath),
-    memory_id: args.memoryId,
-    baseline_content_hash: args.contentHash,
-    baseline_metadata_hash: args.metadataHash,
-    baseline_combined_hash: combinedHash(args.contentHash, args.metadataHash),
-    db_changed_at_utc: args.dbChangedAt,
-    frontmatter_changed_at_utc: args.fileChangedAt,
-    last_seen_file_mtime_utc: fileMtimeUtc(args.filePath),
-    last_synced_at_utc: now,
-  };
+/**
+ * Compute the manifest entry key for a memory.
+ * Uses the memory UUID string directly.
+ */
+export function entryKey(memoryId: string, memoryName: string): string {
+  return memoryId ? String(memoryId) : `name:${sha256(memoryName).slice(0, 12)}`;
 }
 
 export function hashFrontmatterAndContent(frontmatter: Frontmatter, content: string): string {
@@ -178,4 +131,78 @@ export function hashFrontmatterAndContent(frontmatter: Frontmatter, content: str
       links_to: frontmatter.links_to,
     })
   );
+}
+
+// ── Manifest V1 functions ──
+
+export function emptyManifestV1(space: string, spaceId: string): SpaceManifestV1 {
+  return {
+    version: 1,
+    space,
+    space_id: spaceId,
+    manifest_updated_at_utc: new Date().toISOString(),
+    entries: {},
+    last_auto_export: null,
+  };
+}
+
+export function readManifestV1(spaceDir: string, space: string, spaceId: string): SpaceManifestV1 {
+  const manifestPath_ = manifestPath(spaceDir);
+  try {
+    if (!existsSync(manifestPath_)) return emptyManifestV1(space, spaceId);
+    const raw = readFileSync(manifestPath_, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== 1) {
+      // Fall back to empty manifest for non-V1 manifests
+      return emptyManifestV1(space, spaceId);
+    }
+    return {
+      version: 1,
+      space: parsed.space ?? space,
+      space_id: parsed.space_id ?? spaceId,
+      manifest_updated_at_utc: parsed.manifest_updated_at_utc ?? utcNow(),
+      entries: parsed.entries ?? {},
+      last_auto_export: parsed.last_auto_export ?? null,
+    } as SpaceManifestV1;
+  } catch {
+    return emptyManifestV1(space, spaceId);
+  }
+}
+
+export function writeManifestV1(spaceDir: string, manifest: SpaceManifestV1): void {
+  manifest.manifest_updated_at_utc = new Date().toISOString();
+  const ordered = {
+    version: manifest.version,
+    space: manifest.space,
+    space_id: manifest.space_id,
+    manifest_updated_at_utc: manifest.manifest_updated_at_utc,
+    entries: manifest.entries,
+    last_auto_export: manifest.last_auto_export,
+  };
+  writeFileSync(manifestPath(spaceDir), JSON.stringify(ordered, null, 2), 'utf-8');
+}
+
+export function buildEntryV1(args: {
+  memoryId: string;
+  memoryName: string;
+  relativePath: string;
+  contentHash: string;
+  metadataHash: string;
+  dbChangedAt: string | null;
+  fileChangedAt: string | null;
+  filePath: string;
+}): SpaceManifestV1Entry {
+  const now = utcNow();
+  return {
+    memory_id: args.memoryId,
+    memory_name: args.memoryName,
+    path: basename(args.relativePath),
+    baseline_content_hash: args.contentHash,
+    baseline_metadata_hash: args.metadataHash,
+    baseline_combined_hash: combinedHash(args.contentHash, args.metadataHash),
+    db_changed_at_utc: args.dbChangedAt ?? now,
+    frontmatter_changed_at_utc: args.fileChangedAt ?? now,
+    last_seen_file_mtime_utc: fileMtimeUtc(args.filePath) ?? now,
+    last_synced_at_utc: now,
+  };
 }

@@ -14,35 +14,40 @@ export interface MindSyncConfig {
   spaces: Record<string, SpaceSyncConfig>; // key = space name like "projects/mind"
 }
 
-export interface SpaceManifest {
-  space: string;
-}
+// ── Manifest V1 types ──
 
-export interface SpaceManifestV2Entry {
-  memory_name: string;
-  path: string;
-  memory_id?: number;
-  baseline_content_hash: string;
-  baseline_metadata_hash: string;
-  baseline_combined_hash: string;
-  db_changed_at_utc: string | null;
-  frontmatter_changed_at_utc: string | null;
-  last_seen_file_mtime_utc: string | null;
+export interface SpaceManifestV1Entry {
+  memory_id: string; // UUID of the memory
+  memory_name: string; // human-readable name
+  path: string; // managed file path
+  baseline_content_hash: string | null;
+  baseline_metadata_hash: string | null;
+  baseline_combined_hash: string | null;
+  db_changed_at_utc: string;
+  frontmatter_changed_at_utc: string;
+  last_seen_file_mtime_utc: string;
   last_synced_at_utc: string;
   deleted?: boolean;
   tombstone_at_utc?: string;
+  last_export_warning?: string | null;
+  last_export_error?: string | null;
+  conflict_hint?: string | null;
 }
 
-export interface SpaceManifestV2 {
-  version: 2;
-  space: string;
+export interface SpaceManifestV1 {
+  version: 1;
+  space: string; // space name
+  space_id: string; // space UUID
   manifest_updated_at_utc: string;
-  entries: Record<string, SpaceManifestV2Entry>;
+  entries: Record<string, SpaceManifestV1Entry>; // key = memory_id (UUID)
   last_auto_export?: {
-    status: 'ok' | 'warning' | 'error';
-    at_utc: string;
-    message?: string;
-  };
+    started_at_utc: string;
+    total: number;
+    exported: number;
+    stale_pruned: number;
+    errors: number;
+    warnings: string[];
+  } | null;
 }
 
 // ── Sync state types ──
@@ -54,7 +59,7 @@ export interface SyncState {
 }
 
 export interface ExportMemoryInput {
-  id: number;
+  id: string;
   space: string;
   name: string;
   tier: number;
@@ -96,7 +101,7 @@ export interface SyncStatusDiagnostics {
   };
   warnings: string[];
   conflicts: string[];
-  lastAutoExport: SpaceManifestV2['last_auto_export'] | null;
+  lastAutoExport: SpaceManifestV1['last_auto_export'] | null;
 }
 
 // ── File event types ──
@@ -118,7 +123,7 @@ export interface SyncLock {
 // ── Frontmatter ──
 
 export interface Frontmatter {
-  id: number;
+  id: string; // UUID in frontmatter
   space: string;
   name: string;
   tier: number;

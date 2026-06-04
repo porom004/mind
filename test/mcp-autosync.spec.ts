@@ -54,7 +54,7 @@ describe('MCP autosync startup', () => {
     saveConfig(basePath, config);
 
     // Create the space directory
-    const syncDir = getSpaceDir(basePath, 'projects/test');
+    const syncDir = getSpaceDir(basePath, 'projects/test', store);
     const { mkdirSync } = await import('node:fs');
     mkdirSync(syncDir, { recursive: true });
 

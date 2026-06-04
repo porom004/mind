@@ -1,26 +1,30 @@
 // ── Space name normalization and path helpers ──
 
-import { createHash } from 'crypto';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 
-import type { SpaceManifest } from './types';
-
 /**
- * Hash a space name to an 8-character hex string.
- * Used for directory naming in .mind/spaces/<hash>/
+ * Get the directory path for a space's sync files using its UUID.
+ * Format: .mind/spaces/<spaceId>/
  */
-export function hashSpaceName(spaceName: string): string {
-  return createHash('sha256').update(spaceName).digest('hex').substring(0, 8);
+export function getSpaceDirById(basePath: string, spaceId: string): string {
+  return join(basePath, 'spaces', spaceId);
 }
 
 /**
- * Get the directory path for a space's sync files.
- * Format: .mind/spaces/<hash>/
+ * Get the directory path for a space's sync files using the store to resolve
+ * the space UUID. Format: .mind/spaces/<uuid>/
  */
-export function getSpaceDir(basePath: string, spaceName: string): string {
-  const hash = hashSpaceName(spaceName);
-  return join(basePath, 'spaces', hash);
+export function getSpaceDir(
+  basePath: string,
+  spaceName: string,
+  store: { getSpace: (name: string) => { id?: string } | null }
+): string {
+  const space = store.getSpace(spaceName);
+  if (space?.id) {
+    return join(basePath, 'spaces', space.id);
+  }
+  throw new Error(`Space "${spaceName}" has no UUID — cannot determine sync directory`);
 }
 
 /**
@@ -31,40 +35,31 @@ export function getManifestPath(spaceDir: string): string {
 }
 
 /**
- * Ensure the space directory exists and has a manifest.json.
- * Creates the directory and manifest if they don't exist.
+ * Ensure the space directory exists.
+ * Creates the directory if it doesn't exist.
  * Returns the space directory path.
  */
-export function ensureSpaceDir(basePath: string, spaceName: string): string {
-  const dir = getSpaceDir(basePath, spaceName);
-
+export function ensureSpaceDir(spaceDir: string): string {
   // Ensure directory exists
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+  if (!existsSync(spaceDir)) {
+    mkdirSync(spaceDir, { recursive: true });
   }
 
-  // Write manifest.json if it doesn't exist
-  const manifestPath = getManifestPath(dir);
-  if (!existsSync(manifestPath)) {
-    const manifest: SpaceManifest = { space: spaceName };
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
-  }
-
-  return dir;
+  return spaceDir;
 }
 
 /**
  * Read and parse a manifest.json file.
  * Returns null if manifest doesn't exist.
  */
-export function readManifest(spaceDir: string): SpaceManifest | null {
+export function readManifest(spaceDir: string): Record<string, unknown> | null {
   const manifestPath = getManifestPath(spaceDir);
   if (!existsSync(manifestPath)) {
     return null;
   }
   try {
     const content = readFileSync(manifestPath, 'utf8');
-    return JSON.parse(content) as SpaceManifest;
+    return JSON.parse(content) as Record<string, unknown>;
   } catch {
     return null;
   }
@@ -104,9 +99,13 @@ export function findProjectRoot(startPath: string): string | null {
 
 /**
  * Get the sync directory for a specific space.
- * Requires projectRoot to be provided since config is file-based.
+ * Requires projectRoot and a store (to resolve the space UUID).
  */
-export function getSpaceSyncDir(projectRoot: string, spaceName: string): string {
+export function getSpaceSyncDir(
+  projectRoot: string,
+  spaceName: string,
+  store: { getSpace: (name: string) => { id?: string } | null }
+): string {
   const basePath = getSyncBasePath(projectRoot);
-  return getSpaceDir(basePath, spaceName);
+  return getSpaceDir(basePath, spaceName, store);
 }

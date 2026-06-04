@@ -123,6 +123,66 @@ function validateMigratedDatabase(db: Database): void {
   if (foreignKeyProblems.length > 0) {
     throw new Error(`PRAGMA foreign_key_check found ${foreignKeyProblems.length} problem(s)`);
   }
+
+  // v8-specific validation
+  if (version >= 8) {
+    validateV8Database(db);
+  }
+}
+
+function validateV8Database(db: Database): void {
+  const nullMemoryIds = db
+    .query("SELECT COUNT(*) as c FROM memories WHERE id IS NULL OR id = ''")
+    .get() as { c: number };
+  if (nullMemoryIds.c > 0) {
+    throw new Error(`Found ${nullMemoryIds.c} memories with null or empty UUID id`);
+  }
+  const nullSpaceIds = db
+    .query("SELECT COUNT(*) as c FROM spaces WHERE id IS NULL OR id = ''")
+    .get() as { c: number };
+  if (nullSpaceIds.c > 0) {
+    throw new Error(`Found ${nullSpaceIds.c} spaces with null or empty UUID id`);
+  }
+  const dupFtsIds = db
+    .query(
+      'SELECT COUNT(*) as c FROM (SELECT fts_id FROM memories GROUP BY fts_id HAVING COUNT(*) > 1)'
+    )
+    .get() as { c: number };
+  if (dupFtsIds.c > 0) {
+    throw new Error(`Found ${dupFtsIds.c} duplicate fts_id values in memories`);
+  }
+  const orphanFts = db
+    .query(
+      'SELECT COUNT(*) as c FROM memories_fts fts LEFT JOIN memories m ON m.fts_id = fts.rowid WHERE m.id IS NULL'
+    )
+    .get() as { c: number };
+  if (orphanFts.c > 0) {
+    throw new Error(`Found ${orphanFts.c} orphan FTS entries without matching memories`);
+  }
+  const danglingTags = db
+    .query('SELECT COUNT(*) as c FROM memory_tags WHERE memory_id NOT IN (SELECT id FROM memories)')
+    .get() as { c: number };
+  if (danglingTags.c > 0) {
+    throw new Error(`Found ${danglingTags.c} memory tags referencing non-existent memories`);
+  }
+  const danglingLinksSrc = db
+    .query('SELECT COUNT(*) as c FROM links WHERE source_id NOT IN (SELECT id FROM memories)')
+    .get() as { c: number };
+  if (danglingLinksSrc.c > 0) {
+    throw new Error(`Found ${danglingLinksSrc.c} links with non-existent source memories`);
+  }
+  const danglingLinksTgt = db
+    .query('SELECT COUNT(*) as c FROM links WHERE target_id NOT IN (SELECT id FROM memories)')
+    .get() as { c: number };
+  if (danglingLinksTgt.c > 0) {
+    throw new Error(`Found ${danglingLinksTgt.c} links with non-existent target memories`);
+  }
+  const seq = db
+    .query("SELECT next_value FROM fts_id_sequence WHERE entity = 'memories'")
+    .get() as { next_value: number } | null;
+  if (!seq) {
+    throw new Error('fts_id_sequence missing entry for memories');
+  }
 }
 
 function restoreMigrationBackup(dbPath: string, backupPath: string): void {

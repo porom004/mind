@@ -1,20 +1,20 @@
 // ── Sync CLI Commands ──
 // Uses file-based config (.mind/config.yml)
 
-import { existsSync, rmSync as _rmSync } from 'fs';
+import { existsSync } from 'fs';
 import { join } from 'path';
 
 import { style } from '../../helpers/style';
 import { AutoSyncService } from '../../sync/auto-sync-service';
-import { loadConfig, saveConfig, initMindDir } from '../../sync/config-file';
+import { initMindDir, loadConfig, saveConfig } from '../../sync/config-file';
 import {
+  getSyncWatcherStatus,
   startSyncWatcherDetached,
   stopSyncWatcher,
-  getSyncWatcherStatus,
 } from '../../sync/detached-watcher';
 import { FileSyncService } from '../../sync/file-sync-service';
 import { importFromDirectory } from '../../sync/importer';
-import { getSyncBasePath, getSpaceSyncDir, hashSpaceName } from '../../sync/normalize';
+import { getSpaceSyncDir, getSyncBasePath } from '../../sync/normalize';
 import { evaluateSyncStatus } from '../../sync/status-diagnostics';
 import type { ConflictResolution, MindSyncConfig } from '../../sync/types';
 import { ArgParser } from '../arg-parser';
@@ -184,12 +184,12 @@ export const syncGroup: CommandGroup = {
               ? style('enabled', ['green'])
               : style('disabled', ['red']);
             const strategyText = style(spaceConfig.conflictResolution, ['cyan']);
-            const hash = hashSpaceName(spaceName);
+            const spaceId = _store.getSpace(spaceName)?.id ?? '?';
 
             logger.logInfo(`    ${statusIcon} ${spaceName}`);
             logger.logInfo(`       status: ${statusText}`);
             logger.logInfo(`       strategy: ${strategyText}`);
-            logger.logInfo(`       path: .mind/spaces/${hash}/`);
+            logger.logInfo(`       path: .mind/spaces/${spaceId}/`);
           }
         }
         logger.logInfo('');
@@ -220,8 +220,7 @@ export const syncGroup: CommandGroup = {
             return;
           }
 
-          const _hash = hashSpaceName(spaceFilter);
-          const syncDir = getSpaceSyncDir(getProjectRoot(), spaceFilter);
+          const syncDir = getSpaceSyncDir(getProjectRoot(), spaceFilter, store);
           const status = getSyncWatcherStatus();
           const watcherStatus = status.running
             ? style(`running (pid ${status.pid})`, ['green'])
@@ -246,10 +245,10 @@ export const syncGroup: CommandGroup = {
           logger.logInfo(`  Tombstones:     ${diagnostics.counts.tombstones}`);
           if (diagnostics.lastAutoExport) {
             logger.logInfo(
-              `  Last export:    ${diagnostics.lastAutoExport.status} at ${diagnostics.lastAutoExport.at_utc}`
+              `  Last export:    ${diagnostics.lastAutoExport.exported}/${diagnostics.lastAutoExport.total} at ${diagnostics.lastAutoExport.started_at_utc}`
             );
-            if (diagnostics.lastAutoExport.message) {
-              logger.logInfo(`                  ${diagnostics.lastAutoExport.message}`);
+            if (diagnostics.lastAutoExport.errors > 0) {
+              logger.logInfo(`                  ${diagnostics.lastAutoExport.errors} errors`);
             }
           }
           logger.logInfo(`  Strategy:       ${style(spaceConfig.conflictResolution, ['cyan'])}`);
@@ -281,8 +280,8 @@ export const syncGroup: CommandGroup = {
           const statusText = spaceConfig.enabled
             ? style('enabled', ['green'])
             : style('disabled', ['red']);
-          const hash = hashSpaceName(spaceName);
-          const pathDisplay = `.mind/spaces/${hash}/`;
+          const spaceId = store.getSpace(spaceName)?.id ?? '?';
+          const pathDisplay = `.mind/spaces/${spaceId}/`;
           const strategyText = style(spaceConfig.conflictResolution, ['cyan']);
           const diagnostics = evaluateSyncStatus(store, spaceName, basePath);
           const drift =
@@ -336,7 +335,7 @@ export const syncGroup: CommandGroup = {
         initMindDir(projectRoot);
 
         // Calculate the sync directory path
-        const syncDir = getSpaceSyncDir(projectRoot, space);
+        const syncDir = getSpaceSyncDir(projectRoot, space, store);
 
         // Update config
         updateConfig(config => ({
@@ -394,7 +393,7 @@ export const syncGroup: CommandGroup = {
           return;
         }
 
-        const syncDir = getSpaceSyncDir(getProjectRoot(), space);
+        const syncDir = getSpaceSyncDir(getProjectRoot(), space, _store);
 
         updateConfig(config => ({
           ...config,
@@ -437,7 +436,7 @@ export const syncGroup: CommandGroup = {
         }
 
         const projectRoot = getProjectRoot(customPath);
-        const syncDir = getSpaceSyncDir(projectRoot, space);
+        const syncDir = getSpaceSyncDir(projectRoot, space, store);
         const resolution = spaceConfig.conflictResolution;
 
         // Write sync lock before export
@@ -502,7 +501,7 @@ export const syncGroup: CommandGroup = {
         const projectRoot = getProjectRoot(customPath);
         const syncDir = customPath
           ? getSyncBasePath(customPath)
-          : getSpaceSyncDir(projectRoot, space);
+          : getSpaceSyncDir(projectRoot, space, store);
 
         // Export
         const fileSyncService = new FileSyncService(store);
@@ -546,8 +545,8 @@ export const syncGroup: CommandGroup = {
 
         const projectRoot = getProjectRoot(customPath);
         const syncDir = customPath
-          ? getSpaceSyncDir(customPath, space)
-          : getSpaceSyncDir(projectRoot, space);
+          ? getSpaceSyncDir(customPath, space, store)
+          : getSpaceSyncDir(projectRoot, space, store);
         const config = getConfig(projectRoot);
         const resolution = config.spaces[space]?.conflictResolution ?? 'db-wins';
 
@@ -692,7 +691,7 @@ export const syncGroup: CommandGroup = {
           return;
         }
 
-        const syncDir = getSpaceSyncDir(projectRoot, space);
+        const syncDir = getSpaceSyncDir(projectRoot, space, store);
 
         if (!existsSync(syncDir)) {
           logger.logInfo(style(`❌ Sync directory does not exist: ${syncDir}`, ['red']));

@@ -1,31 +1,25 @@
 // ── Sync Config File Tests ──
 
-import { existsSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { expect, test, beforeEach, afterEach, describe } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
 import {
-  loadConfig,
-  saveConfig,
-  initMindDir,
-  getConfigPath,
-  getGitignorePath,
   ensureGitignore,
+  getConfigPath,
   getEnabledSpaces,
-  setSpaceConfig,
-  removeSpaceConfig,
+  getGitignorePath,
   getSpaceConfig,
   hasConfig,
+  initMindDir,
+  loadConfig,
+  removeSpaceConfig,
+  saveConfig,
+  setSpaceConfig,
 } from '../src/sync/config-file';
-import {
-  getSyncBasePath,
-  getSpaceDir,
-  ensureSpaceDir,
-  hashSpaceName,
-  readManifest,
-} from '../src/sync/normalize';
+import { ensureSpaceDir, getSpaceDirById, getSyncBasePath } from '../src/sync/normalize';
 import type { MindSyncConfig } from '../src/sync/types';
 
 let testDir: string;
@@ -228,55 +222,45 @@ describe('config-file operations', () => {
 });
 
 describe('normalize functions', () => {
-  test('hashSpaceName produces consistent 8-char hash', () => {
-    const hash1 = hashSpaceName('projects/mind');
-    const hash2 = hashSpaceName('projects/mind');
-    const hash3 = hashSpaceName('projects/other');
-
-    expect(hash1).toBe(hash2);
-    expect(hash1).toHaveLength(8);
-    expect(hash3).not.toBe(hash1);
-  });
-
-  test('getSpaceDir returns correct path structure', () => {
+  test('getSpaceDirById returns correct path structure', () => {
     const basePath = getSyncBasePath(projectRoot);
-    const spaceDir = getSpaceDir(basePath, 'projects/mind');
+    const fakeId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const spaceDir = getSpaceDirById(basePath, fakeId);
 
-    const expected = join(basePath, 'spaces', hashSpaceName('projects/mind'));
+    const expected = join(basePath, 'spaces', fakeId);
     expect(spaceDir).toBe(expected);
   });
 
-  test('ensureSpaceDir creates directory and manifest', () => {
+  test('ensureSpaceDir creates directory', () => {
     const basePath = getSyncBasePath(projectRoot);
     mkdirSync(basePath, { recursive: true });
 
-    const spaceDir = ensureSpaceDir(basePath, 'projects/mind');
+    const fakeId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const spaceDir = getSpaceDirById(basePath, fakeId);
+    ensureSpaceDir(spaceDir);
 
     expect(existsSync(spaceDir)).toBe(true);
-
-    const manifestPath = join(spaceDir, 'manifest.json');
-    expect(existsSync(manifestPath)).toBe(true);
-
-    const manifest = readManifest(spaceDir);
-    expect(manifest).toEqual({ space: 'projects/mind' });
   });
 
-  test('ensureSpaceDir does not overwrite existing manifest', () => {
+  test('ensureSpaceDir does not remove existing files', () => {
     const basePath = getSyncBasePath(projectRoot);
     mkdirSync(basePath, { recursive: true });
 
-    // Create with custom manifest
-    const spaceDir = ensureSpaceDir(basePath, 'projects/mind');
+    // Create directory with custom manifest
+    const fakeId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const spaceDir = getSpaceDirById(basePath, fakeId);
+    ensureSpaceDir(spaceDir);
     const manifestPath = join(spaceDir, 'manifest.json');
 
     const customManifest = { space: 'projects/mind', custom: true };
     writeFileSync(manifestPath, JSON.stringify(customManifest), 'utf-8');
 
-    // Call again - should not overwrite
-    ensureSpaceDir(basePath, 'projects/mind');
+    // Call again - should not remove existing manifest
+    const spaceDir2 = getSpaceDirById(basePath, fakeId);
+    ensureSpaceDir(spaceDir2);
 
-    const content = readFileSync(manifestPath, 'utf-8');
-    const manifest = JSON.parse(content);
+    const fileContent = readFileSync(manifestPath, 'utf-8');
+    const manifest = JSON.parse(fileContent);
     expect(manifest.custom).toBe(true);
   });
 
@@ -320,12 +304,10 @@ describe('roundtrip: init + enable + load', () => {
     });
 
     // Verify space dir can be created
-    const spaceDir = ensureSpaceDir(basePath, 'projects/mind');
+    const fakeId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const spaceDir = getSpaceDirById(basePath, fakeId);
+    ensureSpaceDir(spaceDir);
     expect(existsSync(spaceDir)).toBe(true);
-
-    // Verify hash is consistent
-    const hash = hashSpaceName('projects/mind');
-    expect(hash).toHaveLength(8);
 
     rmSync(freshDir, { recursive: true, force: true });
   });

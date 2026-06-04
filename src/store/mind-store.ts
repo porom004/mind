@@ -18,7 +18,7 @@ import type {
 } from '../types';
 
 export interface LinkedMemorySummary {
-  id: number;
+  id: string;
   name: string;
   space_name: string;
   changed_at: string;
@@ -34,8 +34,8 @@ export interface MemoryPatchInput {
   tierTransition?: 'promote' | 'demote';
   addTags?: string[];
   removeTags?: string[];
-  addLinksToIds?: number[];
-  removeLinksToIds?: number[];
+  addLinksToIds?: string[];
+  removeLinksToIds?: string[];
 }
 
 export interface MindStore {
@@ -54,10 +54,10 @@ export interface MindStore {
     space: string,
     name: string,
     content: string,
-    opts?: { tags?: string[]; tier?: Tier; pinned?: boolean; linksToIds?: number[] }
+    opts?: { tags?: string[]; tier?: Tier; pinned?: boolean; linksToIds?: string[] }
   ): Promise<Memory>;
   getMemory(space: string, name: string): Memory | null;
-  getMemoryById(id: number): Memory | null;
+  getMemoryById(id: string): Memory | null;
   /**
    * List memories in a space.
    * Default (no tier filter): returns T1 + T2 only.
@@ -70,29 +70,29 @@ export interface MindStore {
    * Used by MCP tools to provide a fast overview without full content.
    */
   getHotMemories(space: string): HotMemorySummary[];
-  updateMemory(id: number, updates: { name?: string; content?: string }): Promise<void>;
+  updateMemory(id: string, updates: { name?: string; content?: string }): Promise<void>;
   moveMemory(
-    id: number,
+    id: string,
     updates: { space: string; name?: string; content?: string; tier?: Tier }
   ): Promise<Memory>;
-  deleteMemory(id: number): void;
+  deleteMemory(id: string): void;
   deleteMemoryByName(space: string, name: string): void;
   /**
    * Record an access (bumps count + last_accessed_at).
    * Also auto-promotes non-pinned memories one tier up (with LRU eviction if destination is full).
    * Silently skips promotion if destination is full and all are pinned.
    */
-  recordAccess(id: number): void;
-  getLinkedMemorySummaries(memoryId: number): {
+  recordAccess(id: string): void;
+  getLinkedMemorySummaries(memoryId: string): {
     links_to: LinkedMemorySummary[];
     linked_by: LinkedMemorySummary[];
   };
-  patchMemory(id: number, patch: MemoryPatchInput): Promise<Memory>;
+  patchMemory(id: string, patch: MemoryPatchInput): Promise<Memory>;
 
   // Tags
-  addMemoryTag(memoryId: number, tag: string): void;
-  removeMemoryTag(memoryId: number, tag: string): void;
-  setMemoryTags(memoryId: number, tags: string[]): void;
+  addMemoryTag(memoryId: string, tag: string): void;
+  removeMemoryTag(memoryId: string, tag: string): void;
+  setMemoryTags(memoryId: string, tags: string[]): void;
   listAllTags(): {
     spaces: { tag: string; count: number }[];
     memories: { tag: string; count: number }[];
@@ -104,19 +104,19 @@ export interface MindStore {
    * Evicts LRU non-pinned from destination if full.
    * Throws if already at T1 or destination is full and all are pinned.
    */
-  promote(id: number): void;
+  promote(id: string): void;
   /**
    * Demote memory one tier down (T1→T2, T2→T3).
    * Throws if already at lowest tier (T3).
    */
-  demote(id: number): void;
-  pin(id: number): void;
-  unpin(id: number): void;
+  demote(id: string): void;
+  pin(id: string): void;
+  unpin(id: string): void;
 
   // Links
-  link(sourceId: number, targetId: number, label?: string): void;
-  unlink(sourceId: number, targetId: number): void;
-  getLinks(memoryId: number): Link[];
+  link(sourceId: string, targetId: string, label?: string): void;
+  unlink(sourceId: string, targetId: string): void;
+  getLinks(memoryId: string): Link[];
 
   // Search (T4 memories are no longer applicable - T3 is unlimited)
   // When RAG is enabled, returns FTS results merged with semantic similarity scores

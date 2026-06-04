@@ -1,4 +1,4 @@
-// ── MemoryRepository: handles all memory operations ──
+// ── MemoryRepository: handles all memory operations (v8: UUID primary keys, fts_id, space_id FK) ──
 
 import type { Database } from 'bun:sqlite';
 
@@ -7,7 +7,7 @@ import { blobToVector, getEmbedding, isRagEnabled, vectorToBlob } from '../../he
 import { normalizeTags } from '../../helpers/tags';
 import type { HotMemorySummary, LegacyBrain, Memory, MemorySummary, Tier } from '../../types';
 import type { LinkedMemorySummary, MemoryPatchInput } from '../mind-store';
-import { FtsHelper, requireMemory } from '../shared';
+import { FtsHelper, generateUuid, now, requireMemory } from '../shared';
 
 import type { LinkRepository } from './link-repository';
 import type { SpaceRepository } from './space-repository';
@@ -18,34 +18,34 @@ export interface MemoryRepository {
     space: string,
     name: string,
     content: string,
-    opts?: { tags?: string[]; tier?: Tier; pinned?: boolean; linksToIds?: number[] }
+    opts?: { tags?: string[]; tier?: Tier; pinned?: boolean; linksToIds?: string[] }
   ): Promise<Memory>;
   getMemory(space: string, name: string): Memory | null;
-  getMemoryById(id: number): Memory | null;
+  getMemoryById(id: string): Memory | null;
   listMemories(space: string, filter?: { tier?: Tier; tag?: string }): MemorySummary[];
   getHotMemories(space: string): HotMemorySummary[];
   resolveMemoryRef(ref: string): { space: string; name: string } | null;
-  updateMemory(id: number, updates: { name?: string; content?: string }): Promise<void>;
+  updateMemory(id: string, updates: { name?: string; content?: string }): Promise<void>;
   moveMemory(
-    id: number,
+    id: string,
     updates: { space: string; name?: string; content?: string; tier?: Tier }
   ): Promise<Memory>;
-  deleteMemory(id: number): void;
+  deleteMemory(id: string): void;
   deleteMemoryByName(space: string, name: string): void;
-  recordAccess(id: number): void;
-  getLinkedMemorySummaries(memoryId: number): {
+  recordAccess(id: string): void;
+  getLinkedMemorySummaries(memoryId: string): {
     links_to: LinkedMemorySummary[];
     linked_by: LinkedMemorySummary[];
   };
-  patchMemory(id: number, patch: MemoryPatchInput): Promise<Memory>;
-  promote(id: number): void;
-  demote(id: number): void;
-  pin(id: number): void;
-  unpin(id: number): void;
+  patchMemory(id: string, patch: MemoryPatchInput): Promise<Memory>;
+  promote(id: string): void;
+  demote(id: string): void;
+  pin(id: string): void;
+  unpin(id: string): void;
   importFromJson(brain: LegacyBrain): void;
 }
 
-function getTagsForMemory(db: Database, memoryId: number): string[] {
+function getTagsForMemory(db: Database, memoryId: string): string[] {
   const rows = db.query('SELECT tag FROM memory_tags WHERE memory_id = ?').all(memoryId) as {
     tag: string;
   }[];
@@ -56,10 +56,12 @@ function rowToMemory(db: Database, row: any): Memory {
   return {
     id: row.id,
     space_name: row.space_name,
+    space_id: row.space_id,
     name: row.name,
     content: row.content,
     tier: row.tier as Tier,
     pinned: row.pinned === 1,
+    fts_id: row.fts_id,
     access_count: row.access_count,
     last_accessed_at: row.last_accessed_at,
     embedding: row.embedding ? blobToVector(row.embedding) : null,
@@ -68,6 +70,33 @@ function rowToMemory(db: Database, row: any): Memory {
     updated_at: row.updated_at,
     changed_at: row.changed_at,
   };
+}
+
+function nextFtsId(db: Database): number {
+  const row = db
+    .query("SELECT next_value FROM fts_id_sequence WHERE entity = 'memories'")
+    .get() as { next_value: number } | null;
+  if (!row) {
+    // Initialize if missing — seed with 2 so first returned id is 1, second is 2, etc.
+    db.run("INSERT OR IGNORE INTO fts_id_sequence (entity, next_value) VALUES ('memories', 2)");
+    return 1;
+  }
+  const current = row.next_value;
+  db.run("UPDATE fts_id_sequence SET next_value = next_value + 1 WHERE entity = 'memories'");
+  return current;
+}
+
+function getSpaceId(db: Database, spaceName: string): string {
+  const row = db.query('SELECT id FROM spaces WHERE name = ?').get(spaceName) as {
+    id: string;
+  } | null;
+  if (!row)
+    throw new Error(`Space "${spaceName}" does not exist. Create it first with space_create tool.`);
+  return row.id;
+}
+
+function memoryJoinSelect(): string {
+  return 'SELECT m.*, s.name as space_name FROM memories m JOIN spaces s ON s.id = m.space_id';
 }
 
 export function createMemoryRepository(
@@ -79,26 +108,15 @@ export function createMemoryRepository(
 ): MemoryRepository {
   // ── LRU / Capacity helpers ──
 
-  /**
-   * Count all memories (pinned + non-pinned) at a given tier in a space.
-   * Limits are applied to ALL memories in a tier; pinned memories cannot be evicted.
-   */
-  function countTierTotal(space: string, tier: number): number {
+  function countTierTotal(spaceId: string, tier: number): number {
     const row = db
-      .query('SELECT COUNT(*) as c FROM memories WHERE space_name = ? AND tier = ?')
-      .get(space, tier) as { c: number };
+      .query('SELECT COUNT(*) as c FROM memories WHERE space_id = ? AND tier = ?')
+      .get(spaceId, tier) as { c: number };
     return row.c;
   }
 
-  /**
-   * Ensure a tier has capacity for one more memory.
-   * If the tier is full, evicts the LRU non-pinned memory to the next tier (no cascading).
-   * T3 is unlimited — always returns true.
-   * @param throwOnFull - if true, throws when tier is full and all are pinned; if false, returns false
-   * @returns true if there is (or was made) capacity, false if no evictable memory
-   */
   function ensureCapacity(
-    space: string,
+    spaceId: string,
     tier: number,
     throwOnFull: boolean,
     touchChangedAt = true
@@ -106,18 +124,17 @@ export function createMemoryRepository(
     const limit = TIER_LIMITS[tier as 1 | 2];
     if (limit === undefined) return true; // T3: unlimited
 
-    const total = countTierTotal(space, tier);
-    if (total < limit) return true; // room available
+    const total = countTierTotal(spaceId, tier);
+    if (total < limit) return true;
 
-    // Tier is full — find LRU non-pinned to evict
     const lru = db
       .query(
         `SELECT id FROM memories
-                 WHERE space_name = ? AND tier = ? AND pinned = 0
+                 WHERE space_id = ? AND tier = ? AND pinned = 0
                  ORDER BY COALESCE(last_accessed_at, created_at) ASC
                  LIMIT 1`
       )
-      .get(space, tier) as { id: number } | null;
+      .get(spaceId, tier) as { id: string } | null;
 
     if (!lru) {
       if (throwOnFull) {
@@ -128,9 +145,8 @@ export function createMemoryRepository(
       return false;
     }
 
-    // Evict LRU one tier down (no cascading — T3 is unlimited, no eviction needed)
     const nextTier = tier + 1;
-    const ts = new Date().toISOString().replace('T', ' ').replace('Z', '').split('.')[0]!;
+    const ts = now();
     if (touchChangedAt) {
       db.run('UPDATE memories SET tier = ?, updated_at = ?, changed_at = ? WHERE id = ?', [
         nextTier,
@@ -144,29 +160,23 @@ export function createMemoryRepository(
     return true;
   }
 
-  function now(): string {
-    return new Date().toISOString().replace('T', ' ').replace('Z', '').split('.')[0]!;
-  }
-
   // ── Memory operations ──
 
   async function addMemory(
     space: string,
     name: string,
     content: string,
-    opts?: { tags?: string[]; tier?: Tier; pinned?: boolean; linksToIds?: number[] }
+    opts?: { tags?: string[]; tier?: Tier; pinned?: boolean; linksToIds?: string[] }
   ): Promise<Memory> {
-    const spaceRow = db.query('SELECT 1 FROM spaces WHERE name = ?').get(space);
-    if (!spaceRow)
-      throw new Error(`Space "${space}" does not exist. Create it first with space_create tool.`);
+    const spaceId = getSpaceId(db, space);
 
     if (!opts?.tags || opts.tags.length === 0) {
       throw new Error('Tags are required and cannot be empty');
     }
 
     const existing = db
-      .query('SELECT 1 FROM memories WHERE space_name = ? AND name = ?')
-      .get(space, name);
+      .query('SELECT 1 FROM memories WHERE space_id = ? AND name = ?')
+      .get(spaceId, name);
     if (existing) throw new Error(`Memory "${name}" already exists in space "${space}"`);
 
     const tier = opts?.tier ?? 2;
@@ -183,18 +193,19 @@ export function createMemoryRepository(
     }
 
     const addMemoryTransaction = db.transaction(() => {
-      // Ensure capacity at target tier (evict LRU if needed); T3 is unlimited
-      ensureCapacity(space, tier, true);
+      ensureCapacity(spaceId, tier, true);
 
       const ts = now();
-      const result = db.run(
-        `INSERT INTO memories (space_name, name, content, tier, pinned, created_at, updated_at, changed_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [space, name, content, tier, pinned ? 1 : 0, ts, ts, ts]
+      const id = generateUuid();
+      const ftsId = nextFtsId(db);
+
+      db.run(
+        `INSERT INTO memories (id, fts_id, space_id, name, content, tier, pinned, created_at, updated_at, changed_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, ftsId, spaceId, name, content, tier, pinned ? 1 : 0, ts, ts, ts]
       );
 
-      const id = Number(result.lastInsertRowid);
-      fts.insert(id, name, content);
+      fts.insert(ftsId, name, content);
 
       if (opts?.tags && opts.tags.length > 0) {
         const normalizedTags = normalizeTags(opts.tags);
@@ -221,7 +232,7 @@ export function createMemoryRepository(
 
     const id = addMemoryTransaction();
 
-    // Generate embedding if RAG is enabled (await so embedding is ready before process exits)
+    // Generate embedding if RAG is enabled
     if (isRagEnabled()) {
       const embedding = await getEmbedding(`${name} ${content}`);
       if (embedding) {
@@ -229,33 +240,36 @@ export function createMemoryRepository(
       }
     }
 
-    return rowToMemory(db, db.query('SELECT * FROM memories WHERE id = ?').get(id) as any);
+    const row = db.query(`${memoryJoinSelect()} WHERE m.id = ?`).get(id) as any;
+    return rowToMemory(db, row);
   }
 
   function getMemory(space: string, name: string): Memory | null {
+    const spaceId = db.query('SELECT id FROM spaces WHERE name = ?').get(space) as {
+      id: string;
+    } | null;
+    if (!spaceId) return null;
+
     const row = db
-      .query('SELECT * FROM memories WHERE space_name = ? AND name = ?')
-      .get(space, name) as any;
+      .query(`${memoryJoinSelect()} WHERE m.space_id = ? AND m.name = ?`)
+      .get(spaceId.id, name) as any;
     if (!row) return null;
     return rowToMemory(db, row);
   }
 
-  function getMemoryById(id: number): Memory | null {
-    const row = db.query('SELECT * FROM memories WHERE id = ?').get(id) as any;
+  function getMemoryById(id: string): Memory | null {
+    const row = db.query(`${memoryJoinSelect()} WHERE m.id = ?`).get(id) as any;
     if (!row) return null;
     return rowToMemory(db, row);
   }
 
   function listMemories(space: string, filter?: { tier?: Tier; tag?: string }): MemorySummary[] {
-    const spaceRow = db.query('SELECT 1 FROM spaces WHERE name = ?').get(space);
-    if (!spaceRow)
-      throw new Error(`Space "${space}" does not exist. Create it first with space_create tool.`);
+    const spaceId = getSpaceId(db, space);
 
-    let sql =
-      'SELECT m.id, m.space_name, m.name, m.tier, m.pinned, m.access_count, m.created_at, m.updated_at, m.changed_at FROM memories m';
+    let sql = `${memoryJoinSelect()}`;
     const joinParams: any[] = [];
-    const conditions: string[] = ['m.space_name = ?'];
-    const whereParams: any[] = [space];
+    const conditions: string[] = ['m.space_id = ?'];
+    const whereParams: any[] = [spaceId];
 
     if (filter?.tag) {
       const normalizedFilter = filter.tag.toLowerCase().trim();
@@ -267,7 +281,6 @@ export function createMemoryRepository(
       conditions.push('m.tier = ?');
       whereParams.push(filter.tier);
     } else {
-      // Default: show T1 + T2 only (active memories)
       conditions.push('m.tier IN (1, 2)');
     }
 
@@ -276,9 +289,10 @@ export function createMemoryRepository(
 
     const params = [...joinParams, ...whereParams];
     const rows = db.query(sql).all(...params) as any[];
-    return rows.map(r => ({
+    return rows.map((r: any) => ({
       id: r.id,
       space_name: r.space_name,
+      space_id: r.space_id,
       name: r.name,
       tier: r.tier as Tier,
       pinned: r.pinned === 1,
@@ -291,14 +305,26 @@ export function createMemoryRepository(
   }
 
   function getHotMemories(space: string): HotMemorySummary[] {
+    const spaceRow = db.query('SELECT id FROM spaces WHERE name = ?').get(space) as {
+      id: string;
+    } | null;
+    if (!spaceRow) return [];
+    const spaceId = getSpaceId(db, space);
+
     const rows = db
       .query(
         `SELECT id, name, tier, pinned, updated_at
                  FROM memories
-                 WHERE space_name = ? AND tier IN (1, 2)
+                 WHERE space_id = ? AND tier IN (1, 2)
                  ORDER BY tier ASC, name ASC`
       )
-      .all(space) as { id: number; name: string; tier: Tier; pinned: number; updated_at: string }[];
+      .all(spaceId) as {
+      id: string;
+      name: string;
+      tier: Tier;
+      pinned: number;
+      updated_at: string;
+    }[];
 
     return rows.map(r => ({
       id: r.id,
@@ -320,7 +346,7 @@ export function createMemoryRepository(
   }
 
   async function updateMemory(
-    id: number,
+    id: string,
     updates: { name?: string; content?: string }
   ): Promise<void> {
     const row = requireMemory(db, id);
@@ -340,16 +366,19 @@ export function createMemoryRepository(
     params.push(id);
     db.run(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`, params);
 
-    // Sync FTS if name or content changed
+    // Sync FTS using fts_id
     if (updates.name !== undefined || updates.content !== undefined) {
-      fts.update(id, updates.name ?? row.name, updates.content ?? row.content);
+      const mem = db.query('SELECT fts_id FROM memories WHERE id = ?').get(id) as {
+        fts_id: number;
+      };
+      fts.update(mem.fts_id, updates.name ?? row.name, updates.content ?? row.content);
     }
 
-    // Regenerate embedding if RAG is enabled (await so embedding is ready before process exits)
+    // Regenerate embedding if RAG is enabled
     if (isRagEnabled() && (updates.name !== undefined || updates.content !== undefined)) {
       const memory = rowToMemory(
         db,
-        db.query('SELECT * FROM memories WHERE id = ?').get(id) as any
+        db.query(`${memoryJoinSelect()} WHERE m.id = ?`).get(id) as any
       );
       const embedding = await getEmbedding(`${memory.name} ${memory.content}`);
       if (embedding) {
@@ -359,44 +388,44 @@ export function createMemoryRepository(
   }
 
   async function moveMemory(
-    id: number,
+    id: string,
     updates: { space: string; name?: string; content?: string; tier?: Tier }
   ): Promise<Memory> {
     const row = requireMemory(db, id);
     const nextSpace = updates.space;
+    const nextSpaceId = getSpaceId(db, nextSpace);
     const nextName = updates.name ?? row.name;
     const nextContent = updates.content ?? row.content;
     const nextTier = updates.tier ?? row.tier;
 
-    const targetSpace = db.query('SELECT 1 FROM spaces WHERE name = ?').get(nextSpace);
-    if (!targetSpace) {
-      throw new Error(
-        `Space "${nextSpace}" does not exist. Create it first with space_create tool.`
-      );
-    }
-
     const existing = db
-      .query('SELECT id FROM memories WHERE space_name = ? AND name = ? AND id != ?')
-      .get(nextSpace, nextName, id) as { id: number } | null;
+      .query('SELECT id FROM memories WHERE space_id = ? AND name = ? AND id != ?')
+      .get(nextSpaceId, nextName, id) as { id: string } | null;
     if (existing) {
       throw new Error(`Memory "${nextName}" already exists in space "${nextSpace}"`);
     }
 
     const moveTransaction = db.transaction(() => {
-      if ((nextSpace !== row.space_name || nextTier !== row.tier) && nextTier < 3) {
-        ensureCapacity(nextSpace, nextTier, true);
+      const currentSpaceId = db.query('SELECT space_id FROM memories WHERE id = ?').get(id) as {
+        space_id: string;
+      };
+      if ((nextSpaceId !== currentSpaceId.space_id || nextTier !== row.tier) && nextTier < 3) {
+        ensureCapacity(nextSpaceId, nextTier, true);
       }
 
       const ts = now();
       db.run(
         `UPDATE memories
-            SET space_name = ?, name = ?, content = ?, tier = ?, updated_at = ?, changed_at = ?
+            SET space_id = ?, name = ?, content = ?, tier = ?, updated_at = ?, changed_at = ?
           WHERE id = ?`,
-        [nextSpace, nextName, nextContent, nextTier, ts, ts, id]
+        [nextSpaceId, nextName, nextContent, nextTier, ts, ts, id]
       );
 
       if (nextName !== row.name || nextContent !== row.content) {
-        fts.update(id, nextName, nextContent);
+        const mem = db.query('SELECT fts_id FROM memories WHERE id = ?').get(id) as {
+          fts_id: number;
+        };
+        fts.update(mem.fts_id, nextName, nextContent);
       }
     });
 
@@ -405,7 +434,7 @@ export function createMemoryRepository(
     if (isRagEnabled() && (nextName !== row.name || nextContent !== row.content)) {
       const memory = rowToMemory(
         db,
-        db.query('SELECT * FROM memories WHERE id = ?').get(id) as any
+        db.query(`${memoryJoinSelect()} WHERE m.id = ?`).get(id) as any
       );
       const embedding = await getEmbedding(`${memory.name} ${memory.content}`);
       if (embedding) {
@@ -413,44 +442,47 @@ export function createMemoryRepository(
       }
     }
 
-    return rowToMemory(db, db.query('SELECT * FROM memories WHERE id = ?').get(id) as any);
+    return rowToMemory(db, db.query(`${memoryJoinSelect()} WHERE m.id = ?`).get(id) as any);
   }
 
-  function deleteMemory(id: number): void {
+  function deleteMemory(id: string): void {
     requireMemory(db, id);
-    fts.delete(id);
+    const ftsId = (
+      db.query('SELECT fts_id FROM memories WHERE id = ?').get(id) as { fts_id: number }
+    )?.fts_id;
+    if (ftsId) fts.delete(ftsId);
     db.run('DELETE FROM memories WHERE id = ?', [id]);
   }
 
   function deleteMemoryByName(space: string, name: string): void {
     const mem = getMemory(space, name);
     if (!mem) throw new Error(`Memory "${name}" not found in space "${space}"`);
-    fts.delete(mem.id);
+    fts.delete(mem.fts_id!);
     db.run('DELETE FROM memories WHERE id = ?', [mem.id]);
   }
 
-  function recordAccess(id: number): void {
+  function recordAccess(id: string): void {
     const row = requireMemory(db, id);
     const ts = now();
 
-    // Always bump access count and timestamp
     db.run(
       'UPDATE memories SET access_count = access_count + 1, last_accessed_at = ?, updated_at = ? WHERE id = ?',
       [ts, ts, id]
     );
 
-    // Auto-promote one tier up — skip if pinned or already at T1
     if (row.pinned || row.tier <= 1) return;
 
     const toTier = row.tier - 1;
-    // Silently skip if destination is full and all are pinned (throwOnFull = false)
-    const ok = ensureCapacity(row.space_name, toTier, false, false);
+    const spaceId = (
+      db.query('SELECT space_id FROM memories WHERE id = ?').get(id) as { space_id: string }
+    ).space_id;
+    const ok = ensureCapacity(spaceId, toTier, false, false);
     if (ok) {
       db.run('UPDATE memories SET tier = ?, updated_at = ? WHERE id = ?', [toTier, ts, id]);
     }
   }
 
-  function getLinkedMemorySummaries(memoryId: number): {
+  function getLinkedMemorySummaries(memoryId: string): {
     links_to: LinkedMemorySummary[];
     linked_by: LinkedMemorySummary[];
   } {
@@ -458,21 +490,23 @@ export function createMemoryRepository(
 
     const linksToRows = db
       .query(
-        `SELECT m.id, m.name, m.space_name, m.changed_at, m.tier, m.pinned
+        `SELECT m.id, m.name, s.name as space_name, m.changed_at, m.tier, m.pinned
                  FROM links l
                  JOIN memories m ON m.id = l.target_id
+                 JOIN spaces s ON s.id = m.space_id
                  WHERE l.source_id = ?
-                 ORDER BY m.changed_at DESC, m.id DESC`
+                 ORDER BY m.changed_at DESC, m.rowid DESC`
       )
       .all(memoryId) as any[];
 
     const linkedByRows = db
       .query(
-        `SELECT m.id, m.name, m.space_name, m.changed_at, m.tier, m.pinned
+        `SELECT m.id, m.name, s.name as space_name, m.changed_at, m.tier, m.pinned
                  FROM links l
                  JOIN memories m ON m.id = l.source_id
+                 JOIN spaces s ON s.id = m.space_id
                  WHERE l.target_id = ?
-                 ORDER BY m.changed_at DESC, m.id DESC`
+                 ORDER BY m.changed_at DESC, m.rowid DESC`
       )
       .all(memoryId) as any[];
 
@@ -492,7 +526,7 @@ export function createMemoryRepository(
     };
   }
 
-  async function patchMemory(id: number, patch: MemoryPatchInput): Promise<Memory> {
+  async function patchMemory(id: string, patch: MemoryPatchInput): Promise<Memory> {
     requireMemory(db, id);
 
     const hasAnyOperation =
@@ -567,7 +601,10 @@ export function createMemoryRepository(
 
         params.push(id);
         db.run(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`, params);
-        fts.update(id, patch.name ?? row.name, patch.content ?? row.content);
+        const mem = db.query('SELECT fts_id FROM memories WHERE id = ?').get(id) as {
+          fts_id: number;
+        };
+        fts.update(mem.fts_id, patch.name ?? row.name, patch.content ?? row.content);
       }
 
       if (patch.pinned !== undefined) {
@@ -614,7 +651,7 @@ export function createMemoryRepository(
     if (isRagEnabled() && (patch.name !== undefined || patch.content !== undefined)) {
       const memory = rowToMemory(
         db,
-        db.query('SELECT * FROM memories WHERE id = ?').get(id) as any
+        db.query(`${memoryJoinSelect()} WHERE m.id = ?`).get(id) as any
       );
       const embedding = await getEmbedding(`${memory.name} ${memory.content}`);
       if (embedding) {
@@ -622,16 +659,18 @@ export function createMemoryRepository(
       }
     }
 
-    return rowToMemory(db, db.query('SELECT * FROM memories WHERE id = ?').get(id) as any);
+    return rowToMemory(db, db.query(`${memoryJoinSelect()} WHERE m.id = ?`).get(id) as any);
   }
 
-  function promote(id: number): void {
+  function promote(id: string): void {
     const row = requireMemory(db, id);
     if (row.tier <= 1) throw new Error('Memory is already at the highest tier');
 
     const toTier = row.tier - 1;
-    // Throws if full and all are pinned
-    ensureCapacity(row.space_name, toTier, true, true);
+    const spaceId = (
+      db.query('SELECT space_id FROM memories WHERE id = ?').get(id) as { space_id: string }
+    ).space_id;
+    ensureCapacity(spaceId, toTier, true, true);
     const ts = now();
     db.run('UPDATE memories SET tier = ?, updated_at = ?, changed_at = ? WHERE id = ?', [
       toTier,
@@ -641,7 +680,7 @@ export function createMemoryRepository(
     ]);
   }
 
-  function demote(id: number): void {
+  function demote(id: string): void {
     const row = requireMemory(db, id);
     if (row.tier >= 3) throw new Error('Memory is already at the lowest tier');
     const ts = now();
@@ -652,7 +691,7 @@ export function createMemoryRepository(
     ]);
   }
 
-  function pin(id: number): void {
+  function pin(id: string): void {
     requireMemory(db, id);
     const ts = now();
     db.run('UPDATE memories SET pinned = 1, updated_at = ?, changed_at = ? WHERE id = ?', [
@@ -662,7 +701,7 @@ export function createMemoryRepository(
     ]);
   }
 
-  function unpin(id: number): void {
+  function unpin(id: string): void {
     requireMemory(db, id);
     const ts = now();
     db.run('UPDATE memories SET pinned = 0, updated_at = ?, changed_at = ? WHERE id = ?', [
@@ -675,28 +714,36 @@ export function createMemoryRepository(
   function importFromJson(brain: LegacyBrain): void {
     const transaction = db.transaction(() => {
       for (const [spaceName, spaceData] of Object.entries(brain)) {
-        const existing = db.query('SELECT 1 FROM spaces WHERE name = ?').get(spaceName);
+        let spaceId: string;
+        const existing = db.query('SELECT id FROM spaces WHERE name = ?').get(spaceName) as {
+          id: string;
+        } | null;
         if (!existing) {
           const ts = now();
+          spaceId = generateUuid();
           db.run(
-            'INSERT INTO spaces (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)',
-            [spaceName, spaceData.description, ts, ts]
+            'INSERT INTO spaces (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+            [spaceId, spaceName, spaceData.description, ts, ts]
           );
+        } else {
+          spaceId = existing.id;
         }
 
         for (const memory of spaceData.memories) {
           const memName = memory.name || '(unnamed)';
           const existingMem = db
-            .query('SELECT 1 FROM memories WHERE space_name = ? AND name = ?')
-            .get(spaceName, memName);
+            .query('SELECT 1 FROM memories WHERE space_id = ? AND name = ?')
+            .get(spaceId, memName);
           if (!existingMem) {
             const ts = now();
-            const result = db.run(
-              `INSERT INTO memories (space_name, name, content, tier, created_at, updated_at, changed_at)
-                             VALUES (?, ?, ?, 2, ?, ?, ?)`,
-              [spaceName, memName, memory.description ?? '', ts, ts, ts]
+            const id = generateUuid();
+            const ftsId = nextFtsId(db);
+            db.run(
+              `INSERT INTO memories (id, fts_id, space_id, name, content, tier, created_at, updated_at, changed_at)
+                             VALUES (?, ?, ?, ?, ?, 2, ?, ?, ?)`,
+              [id, ftsId, spaceId, memName, memory.description ?? '', ts, ts, ts]
             );
-            fts.insert(Number(result.lastInsertRowid), memName, memory.description ?? '');
+            fts.insert(ftsId, memName, memory.description ?? '');
           }
         }
       }

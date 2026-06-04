@@ -9,7 +9,7 @@ import { expect, test, beforeEach, afterEach, describe } from 'bun:test';
 
 import type { MindStore } from '../src/store/mind-store';
 import { initMindDir, loadConfig, saveConfig } from '../src/sync/config-file';
-import { getSyncBasePath, getSpaceDir, hashSpaceName } from '../src/sync/normalize';
+import { getSyncBasePath, getSpaceDir, getSpaceDirById } from '../src/sync/normalize';
 
 import { createTestStore } from './mocks/test-store';
 
@@ -128,7 +128,7 @@ describe('sync enable command', () => {
 
     // Get the sync directory path
     const basePath = getSyncBasePath(projectRoot);
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
 
     // Verify sync directory doesn't exist yet
     expect(existsSync(spaceDir)).toBe(false);
@@ -246,7 +246,7 @@ describe('sync export includes all tiers', () => {
 
     // All three tiers must be exported
     expect(result.exported).toBe(3);
-    const spaceDir = getSpaceDir(basePath, 'projects/test');
+    const spaceDir = getSpaceDir(basePath, 'projects/test', store);
     expect(existsSync(join(spaceDir, 'hot-tier.md'))).toBe(true);
     expect(existsSync(join(spaceDir, 'warm-tier.md'))).toBe(true);
     expect(existsSync(join(spaceDir, 'cold-tier.md'))).toBe(true);
@@ -254,26 +254,12 @@ describe('sync export includes all tiers', () => {
 });
 
 describe('file structure', () => {
-  test('space directory uses hash-based naming', () => {
-    const hash = hashSpaceName('projects/mind');
-
-    expect(hash).toHaveLength(8);
-    expect(/^[a-f0-9]+$/.test(hash)).toBe(true);
-
-    // Same name produces same hash
-    const hash2 = hashSpaceName('projects/mind');
-    expect(hash2).toBe(hash);
-
-    // Different name produces different hash
-    const hash3 = hashSpaceName('projects/other');
-    expect(hash3).not.toBe(hash);
-  });
-
   test('manifest.json contains space name', () => {
     initMindDir(projectRoot);
 
     const basePath = getSyncBasePath(projectRoot);
-    const spaceDir = getSpaceDir(basePath, 'projects/mind');
+    const fakeId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const spaceDir = getSpaceDirById(basePath, fakeId);
 
     mkdirSync(spaceDir, { recursive: true });
     writeFileSync(

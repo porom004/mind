@@ -29,9 +29,9 @@ echo "3. Enabling sync and exporting..."
 
 # 4. Verificar archivos exportados
 echo "4. Verifying exported files..."
-# Files are in .mind/spaces/<hash>/
-SPACE_HASH=$(echo -n "projects/test" | sha256sum | cut -c1-8)
-COUNT=$(ls "$TEST_DIR/markdown/.mind/spaces/$SPACE_HASH"/*.md 2>/dev/null | wc -l)
+# Files are in .mind/spaces/<uuid>/
+SPACE_DIR=$(find "$TEST_DIR/markdown/.mind/spaces" -maxdepth 1 -mindepth 1 -type d | head -1)
+COUNT=$(ls "$SPACE_DIR"/*.md 2>/dev/null | wc -l)
 if [ "$COUNT" -ne 3 ]; then
   echo "FAIL: Expected 3 files, got $COUNT"
   exit 1
@@ -39,7 +39,7 @@ fi
 
 # 5. Verificar frontmatter en archivos
 echo "5. Verifying frontmatter..."
-for file in "$TEST_DIR/markdown/.mind/spaces/$SPACE_HASH"/*.md; do
+for file in "$SPACE_DIR"/*.md; do
   if ! head -1 "$file" | grep -q "^---$"; then
     echo "FAIL: $file missing frontmatter start"
     exit 1
@@ -48,9 +48,8 @@ done
 
 # 6. Modificar archivo externamente
 echo "6. Testing external modification detection..."
-# Calculate space hash (same algorithm as src/sync/normalize.ts)
-SPACE_HASH=$(echo -n "projects/test" | sha256sum | cut -c1-8)
-cat > "$TEST_DIR/markdown/.mind/spaces/$SPACE_HASH/external.md" << 'EOF'
+# Use dynamically discovered space dir
+cat > "$SPACE_DIR/external.md" << 'EOF'
 ---
 id: 999
 space: projects/test
@@ -118,9 +117,9 @@ echo "7.3. Adding memory from team member A..."
 echo "7.4. Exporting to simulate git push..."
 ./mind sync now --space projects/test-team
 
-# Calculate space hash
-SPACE_HASH=$(echo -n "projects/test-team" | sha256sum | cut -c1-8)
-SYNC_DIR="$TEST7_DIR/markdown/.mind/spaces/$SPACE_HASH"
+# Discover space dir dynamically
+SPACE_DIR=$(find "$TEST7_DIR/markdown/.mind/spaces" -maxdepth 1 -mindepth 1 -type d | head -1)
+SYNC_DIR="$SPACE_DIR"
 
 echo "7.5. Simulating git pull — adding new file from team member B..."
 cat > "$SYNC_DIR/team-member-b.md" << 'EOF'
@@ -177,8 +176,8 @@ echo "8.3. Creating memory and exporting..."
 ./mind add projects/test-conflict conflict-test "Original content" --tags cat:test
 ./mind sync now --space projects/test-conflict --path "$TEST8_DIR/markdown"
 
-SPACE_HASH=$(echo -n "projects/test-conflict" | sha256sum | cut -c1-8)
-SYNC_DIR="$TEST8_DIR/markdown/.mind/spaces/$SPACE_HASH"
+SPACE_DIR=$(find "$TEST8_DIR/markdown/.mind/spaces" -maxdepth 1 -mindepth 1 -type d | head -1)
+SYNC_DIR="$SPACE_DIR"
 
 echo "8.4. Simulating teammate changed file (git pull)..."
 # Read the exported file to get the correct frontmatter structure
@@ -241,8 +240,8 @@ echo "9.3. Creating memory and exporting..."
 ./mind add projects/test-file-wins file-wins-test "Original file content" --tags cat:test
 ./mind sync now --space projects/test-file-wins --path "$TEST9_DIR/markdown"
 
-SPACE_HASH=$(echo -n "projects/test-file-wins" | sha256sum | cut -c1-8)
-SYNC_DIR="$TEST9_DIR/markdown/.mind/spaces/$SPACE_HASH"
+SPACE_DIR=$(find "$TEST9_DIR/markdown/.mind/spaces" -maxdepth 1 -mindepth 1 -type d | head -1)
+SYNC_DIR="$SPACE_DIR"
 
 echo "9.4. Modifying file externally (simulating teammate change via git pull)..."
 # Read the exported file to get the correct frontmatter structure

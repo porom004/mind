@@ -87,14 +87,14 @@ export function cosineSimilarity(a: EmbeddingVector, b: EmbeddingVector): number
 }
 
 export interface ScoredMemory {
-  id: number;
+  id: string;
   score: number;
 }
 
 export async function semanticSearch(
   query: string,
-  getMemoryEmbedding: (_id: number) => Float32Array | null,
-  memoryIds: number[]
+  getMemoryEmbedding: (_id: string) => Float32Array | null,
+  memoryIds: string[]
 ): Promise<ScoredMemory[]> {
   const queryEmbedding = await getEmbedding(query);
   if (!queryEmbedding) {

@@ -1,13 +1,11 @@
 // ── FileSyncService: exports memories from DB to filesystem ──
 
 import {
-  mkdirSync as _mkdirSync,
-  writeFileSync,
   existsSync as _existsSync,
   readFileSync as _readFileSync,
-  readdirSync as _readdirSync,
-  unlinkSync,
   statSync,
+  unlinkSync,
+  writeFileSync,
 } from 'fs';
 import { join } from 'path';
 
@@ -15,7 +13,7 @@ import type { Link, Memory, MemorySummary } from '../types';
 
 import { generateMarkdown, parseFrontmatter } from './frontmatter';
 import {
-  buildEntry,
+  buildEntryV1,
   combinedHash,
   entryKey,
   evaluateSyncState,
@@ -24,20 +22,21 @@ import {
   hashMetadata,
   normalizeUtcTimestamp,
   parseUtcTimestampEpoch,
-  readManifestV2,
-  writeManifestV2,
+  readManifestV1,
+  writeManifestV1,
 } from './manifest';
-import { ensureSpaceDir, getSpaceDir as _getSpaceDir } from './normalize';
-import type { ConflictResolution, ExportResult, SpaceManifestV2 } from './types';
+import { ensureSpaceDir, getSpaceDirById } from './normalize';
+import type { ConflictResolution, ExportResult, SpaceManifestV1 } from './types';
 
 /**
  * Minimal interface for store operations needed by FileSyncService.
  * This allows FileSyncService to work with any compatible implementation.
  */
 export interface SyncStore {
+  getSpace(name: string): { id?: string } | null;
   listMemories(space: string, filter?: any): MemorySummary[];
-  getMemoryById(id: number): Memory | null;
-  getLinks(memoryId: number): Link[];
+  getMemoryById(id: string): Memory | null;
+  getLinks(memoryId: string): Link[];
   queryMemories(filter?: {
     space?: string;
     tier?: number;
@@ -53,8 +52,8 @@ export class FileSyncService {
   ) {}
 
   /**
-   * Export all memories from a space to files in the new structure:
-   * .mind/spaces/<hash>/memory-1.md, memory-2.md, ...
+   * Export all memories from a space to files using UUID-based directories.
+   * .mind/spaces/<space_uuid>/memory-name.md
    *
    * Creates the space directory and manifest.json if they don't exist.
    * Exports ALL tiers (T1+T2+T3) for a complete snapshot.
@@ -62,17 +61,28 @@ export class FileSyncService {
   async exportSpaceToFiles(space: string, basePath: string): Promise<ExportResult> {
     const result: ExportResult = { exported: 0, failed: 0, errors: [], warnings: [] };
 
-    // Ensure the space directory exists with manifest
-    let spaceDir: string;
+    // Resolve space UUID for directory naming
+    const spaceInfo = this.store.getSpace(space);
+    const spaceId = spaceInfo?.id;
+    if (!spaceId) {
+      result.failed++;
+      result.errors.push(`Space "${space}" has no UUID — cannot determine sync directory`);
+      return result;
+    }
+
+    // Resolve the space directory using UUID
+    const spaceDir = getSpaceDirById(basePath, spaceId);
+
+    // Ensure the directory exists
     try {
-      spaceDir = ensureSpaceDir(basePath, space);
+      ensureSpaceDir(spaceDir);
     } catch (err) {
       result.failed++;
       result.errors.push(`Failed to create space directory: ${err}`);
       return result;
     }
 
-    const manifest = readManifestV2(spaceDir, space);
+    const manifest = readManifestV1(spaceDir, space, spaceId);
     const seenKeys = new Set<string>();
     const usedPaths = new Set<string>();
 
@@ -81,7 +91,6 @@ export class FileSyncService {
     }
 
     // Export ALL memories in the space (all tiers) via paginated queryMemories
-    // queryMemories defaults to limit:25, so we paginate to get all memories
     const BATCH_SIZE = 100;
     let offset = 0;
     let hasMore = true;
@@ -156,7 +165,7 @@ export class FileSyncService {
 
           const markdown = generateMarkdown(frontmatterData, memory.content);
           writeFileSync(filePath, markdown, 'utf-8');
-          manifest.entries[key] = buildEntry({
+          manifest.entries[key] = buildEntryV1({
             memoryId: memory.id,
             memoryName: memory.name,
             relativePath,
@@ -178,7 +187,7 @@ export class FileSyncService {
     }
 
     this.pruneDeletedMemories(spaceDir, manifest, seenKeys, result);
-    writeManifestV2(spaceDir, manifest);
+    writeManifestV1(spaceDir, manifest);
 
     return result;
   }
@@ -209,7 +218,7 @@ export class FileSyncService {
 
   private pruneDeletedMemories(
     spaceDir: string,
-    manifest: SpaceManifestV2,
+    manifest: SpaceManifestV1,
     seenKeys: Set<string>,
     result: ExportResult
   ): void {
@@ -228,7 +237,7 @@ export class FileSyncService {
     spaceDir: string,
     relativePath: string,
     result: ExportResult,
-    manifest: SpaceManifestV2
+    manifest: SpaceManifestV1
   ): void {
     const isManaged = Object.values(manifest.entries).some(entry => entry.path === relativePath);
     if (!isManaged) return;
@@ -253,7 +262,11 @@ export class FileSyncService {
       usedPaths.add(preferred);
       return preferred;
     }
-    const suffix = String(memory.id ?? Math.abs(this.hashCode(memory.name))).slice(0, 8);
+    const suffix = String(
+      typeof memory.id === 'string'
+        ? memory.id.slice(0, 8)
+        : (memory.id ?? Math.abs(this.hashCode(memory.name)))
+    ).slice(0, 8);
     const collisionSafe = `${this.sanitizeFilename(memory.name)}-${suffix}.md`;
     usedPaths.add(collisionSafe);
     return collisionSafe;
@@ -267,7 +280,7 @@ export class FileSyncService {
    * Build links_to array from memory links.
    * Uses space:name format for cross-space links, bare name for same-space.
    */
-  private buildLinksTo(memoryId: number, links: Link[], _defaultSpace: string): string[] {
+  private buildLinksTo(memoryId: string, links: Link[], _defaultSpace: string): string[] {
     return links
       .filter(link => link.source_id === memoryId)
       .map(link => {

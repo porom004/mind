@@ -19,8 +19,8 @@ import { createMemoryTools } from '../src/mcp/tools/memories';
 import type { MindStore } from '../src/store/mind-store';
 import { initMindDir, loadConfig, saveConfig } from '../src/sync/config-file';
 import { parseFrontmatter } from '../src/sync/frontmatter';
-import { getSyncBasePath, getSpaceSyncDir } from '../src/sync/normalize';
-import type { SpaceManifestV2 } from '../src/sync/types';
+import { getSpaceDir, getSpaceSyncDir, getSyncBasePath } from '../src/sync/normalize';
+import type { SpaceManifestV1 } from '../src/sync/types';
 
 import { createTestStore } from './mocks/test-store';
 
@@ -39,13 +39,18 @@ function enableSync(
   saveConfig(basePath, config);
 }
 
-function readFrontmatter(space: string, fileName: string) {
-  const file = readFileSync(join(getSpaceSyncDir(root, space), fileName), 'utf-8');
+function readFrontmatter(store: MindStore, space: string, fileName: string) {
+  const file = readFileSync(
+    join(getSpaceDir(getSyncBasePath(root), space, store), fileName),
+    'utf-8'
+  );
   return parseFrontmatter(file).frontmatter;
 }
 
-function readManifest(space: string): SpaceManifestV2 {
-  return JSON.parse(readFileSync(join(getSpaceSyncDir(root, space), 'manifest.json'), 'utf-8'));
+function readManifest(store: MindStore, space: string): SpaceManifestV1 {
+  return JSON.parse(
+    readFileSync(join(getSpaceDir(getSyncBasePath(root), space, store), 'manifest.json'), 'utf-8')
+  ) as SpaceManifestV1;
 }
 
 beforeEach(() => {
@@ -76,10 +81,11 @@ describe('manifest v2 canonical hashes and timestamps', () => {
     );
 
     expect(result.failed).toBe(0);
-    const manifest = readManifest('projects/test');
-    expect(manifest.version).toBe(2);
+    const manifest = readManifest(store, 'projects/test');
+    expect(manifest.version).toBe(1);
     expect(manifest.manifest_updated_at_utc).toMatch(/Z$/);
-    const entry = Object.values(manifest.entries)[0]!;
+    const entries = Object.values(manifest.entries ?? {});
+    const entry = entries[0]!;
     expect(entry.memory_name).toBe('baseline-memory');
     expect(entry.baseline_content_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(entry.baseline_metadata_hash).toMatch(/^[a-f0-9]{64}$/);
@@ -120,11 +126,11 @@ describe('latest-wins UTC timestamp decisions', () => {
     expect(
       resolveConflict(
         {
-          memoryId: 1,
+          memoryId: '1',
           memoryName: 'future-memory',
           space: 'projects/test',
           dbMemory: {
-            id: 1,
+            id: '1',
             name: 'future-memory',
             content: 'db',
             changed_at: '2026-05-07 10:00:00',
@@ -222,7 +228,7 @@ describe('withAutoExport decorator', () => {
       tags: ['cat:decision'],
     });
 
-    const filePath = join(getSpaceSyncDir(root, 'projects/test'), 'auto-memory.md');
+    const filePath = join(getSpaceSyncDir(root, 'projects/test', store), 'auto-memory.md');
     expect(existsSync(filePath)).toBe(true);
 
     const beforeRead = readFileSync(filePath, 'utf-8');
@@ -243,9 +249,9 @@ describe('withAutoExport decorator', () => {
       });
     });
 
-    expect(existsSync(join(getSpaceSyncDir(root, 'projects/test'), 'imported-memory.md'))).toBe(
-      false
-    );
+    expect(
+      existsSync(join(getSpaceSyncDir(root, 'projects/test', store), 'imported-memory.md'))
+    ).toBe(false);
   });
 
   test('logs auto-export failures without failing primary DB mutations', async () => {
@@ -257,7 +263,7 @@ describe('withAutoExport decorator', () => {
     await synced.addMemory('projects/test', 'conflict-memory', 'DB content', {
       tags: ['cat:decision'],
     });
-    const filePath = join(getSpaceSyncDir(root, 'projects/test'), 'conflict-memory.md');
+    const filePath = join(getSpaceSyncDir(root, 'projects/test', store), 'conflict-memory.md');
     writeFileSync(filePath, readFileSync(filePath, 'utf-8') + '\nexternal edit');
 
     await synced.updateMemory(synced.getMemory('projects/test', 'conflict-memory')!.id, {
@@ -283,37 +289,37 @@ describe('withAutoExport decorator', () => {
     });
 
     synced.promote(source.id);
-    expect(readFrontmatter('projects/test', 'source.md').tier).toBe(2);
+    expect(readFrontmatter(store, 'projects/test', 'source.md').tier).toBe(2);
 
     synced.addMemoryTag(source.id, 'cat:bugfix');
-    expect(readFrontmatter('projects/test', 'source.md').tags).toContain('cat:bugfix');
+    expect(readFrontmatter(store, 'projects/test', 'source.md').tags).toContain('cat:bugfix');
 
     synced.removeMemoryTag(source.id, 'cat:decision');
-    expect(readFrontmatter('projects/test', 'source.md').tags).not.toContain('cat:decision');
+    expect(readFrontmatter(store, 'projects/test', 'source.md').tags).not.toContain('cat:decision');
 
     synced.setMemoryTags(source.id, ['cat:discovery']);
-    expect(readFrontmatter('projects/test', 'source.md').tags).toEqual(['cat:discovery']);
+    expect(readFrontmatter(store, 'projects/test', 'source.md').tags).toEqual(['cat:discovery']);
 
     synced.pin(source.id);
-    expect(readFrontmatter('projects/test', 'source.md').pinned).toBe(true);
+    expect(readFrontmatter(store, 'projects/test', 'source.md').pinned).toBe(true);
 
     synced.link(source.id, target.id, 'related');
-    expect(readFrontmatter('projects/test', 'source.md').links_to).toContain('target');
+    expect(readFrontmatter(store, 'projects/test', 'source.md').links_to).toContain('target');
 
     synced.unlink(source.id, target.id);
-    expect(readFrontmatter('projects/test', 'source.md').links_to).not.toContain('target');
+    expect(readFrontmatter(store, 'projects/test', 'source.md').links_to).not.toContain('target');
 
     synced.unpin(source.id);
-    expect(readFrontmatter('projects/test', 'source.md').pinned).toBe(false);
+    expect(readFrontmatter(store, 'projects/test', 'source.md').pinned).toBe(false);
 
     const beforeAccess = readFileSync(
-      join(getSpaceSyncDir(root, 'projects/test'), 'source.md'),
+      join(getSpaceSyncDir(root, 'projects/test', store), 'source.md'),
       'utf-8'
     );
     synced.recordAccess(source.id);
-    expect(readFileSync(join(getSpaceSyncDir(root, 'projects/test'), 'source.md'), 'utf-8')).toBe(
-      beforeAccess
-    );
+    expect(
+      readFileSync(join(getSpaceSyncDir(root, 'projects/test', store), 'source.md'), 'utf-8')
+    ).toBe(beforeAccess);
   });
 
   test('exports checkpoint save and checkpoint done mutations through MCP tools', async () => {
@@ -333,9 +339,9 @@ describe('withAutoExport decorator', () => {
     expect(saveResult.isError).not.toBe(true);
 
     const checkpointName = synced.listMemories('projects/test', { tag: 'checkpoint' })[0]!.name;
-    expect(existsSync(join(getSpaceSyncDir(root, 'projects/test'), `${checkpointName}.md`))).toBe(
-      true
-    );
+    expect(
+      existsSync(join(getSpaceSyncDir(root, 'projects/test', store), `${checkpointName}.md`))
+    ).toBe(true);
 
     const doneResult = await checkpoints.checkpoint_done.handler({
       space: 'projects/test',
@@ -344,7 +350,7 @@ describe('withAutoExport decorator', () => {
     });
     expect(doneResult.isError).not.toBe(true);
 
-    const exportedFiles = Object.values(readManifest('projects/test').entries).map(
+    const exportedFiles = Object.values(readManifest(store, 'projects/test').entries ?? {}).map(
       entry => entry.path
     );
     expect(exportedFiles.some(path => path.startsWith('session-'))).toBe(true);
@@ -360,7 +366,7 @@ describe('sync service conflict/stale behavior', () => {
     enableSync('projects/test');
     await new FileSyncService(store).exportSpaceToFiles('projects/test', getSyncBasePath(root));
 
-    const filePath = join(getSpaceSyncDir(root, 'projects/test'), 'missing-file.md');
+    const filePath = join(getSpaceSyncDir(root, 'projects/test', store), 'missing-file.md');
     unlinkSync(filePath);
     const status = evaluateSyncStatus(store, 'projects/test', getSyncBasePath(root));
 
@@ -383,7 +389,7 @@ describe('sync service conflict/stale behavior', () => {
     });
     await synced.updateMemory(memory.id, { name: 'new-name' });
 
-    const dir = getSpaceSyncDir(root, 'projects/test');
+    const dir = getSpaceSyncDir(root, 'projects/test', store);
     expect(existsSync(join(dir, 'old-name.md'))).toBe(false);
     expect(existsSync(join(dir, 'new-name.md'))).toBe(true);
   });
@@ -403,7 +409,7 @@ describe('sync service conflict/stale behavior', () => {
     expect(result.failed).toBe(0);
     expect(result.exported).toBe(2);
     expect(
-      Object.values(readManifest('projects/test').entries)
+      Object.values(readManifest(store, 'projects/test').entries ?? {})
         .map(e => e.path)
         .sort()
     ).toHaveLength(2);
@@ -433,7 +439,7 @@ describe('sync service conflict/stale behavior', () => {
       getSyncBasePath(root)
     );
 
-    const filePath = join(getSpaceSyncDir(root, 'projects/test'), 'latest-db.md');
+    const filePath = join(getSpaceSyncDir(root, 'projects/test', store), 'latest-db.md');
     const externalFile = readFileSync(filePath, 'utf-8') + '\nexternal conflict';
     writeFileSync(filePath, externalFile);
     const olderFileMtime = new Date(Date.parse(memory.changed_at.replace(' ', 'T') + 'Z') - 60_000);
@@ -460,7 +466,7 @@ describe('sync service conflict/stale behavior', () => {
       getSyncBasePath(root)
     );
 
-    const filePath = join(getSpaceSyncDir(root, 'projects/test'), 'latest-file.md');
+    const filePath = join(getSpaceSyncDir(root, 'projects/test', store), 'latest-file.md');
     writeFileSync(filePath, readFileSync(filePath, 'utf-8') + '\nexternal conflict');
     const newerFileMtime = new Date(Date.parse(memory.changed_at.replace(' ', 'T') + 'Z') + 60_000);
     utimesSync(filePath, newerFileMtime, newerFileMtime);
@@ -491,7 +497,9 @@ describe('CLI, API, and MCP mutation entrypoints', () => {
       }
     );
 
-    expect(existsSync(join(getSpaceSyncDir(root, 'projects/test'), 'cli-memory.md'))).toBe(true);
+    expect(existsSync(join(getSpaceSyncDir(root, 'projects/test', store), 'cli-memory.md'))).toBe(
+      true
+    );
   });
 
   test('API memory creation writes enabled sync files automatically', async () => {
@@ -507,7 +515,9 @@ describe('CLI, API, and MCP mutation entrypoints', () => {
     );
 
     expect(response.status).toBe(201);
-    expect(existsSync(join(getSpaceSyncDir(root, 'projects/test'), 'api-memory.md'))).toBe(true);
+    expect(existsSync(join(getSpaceSyncDir(root, 'projects/test', store), 'api-memory.md'))).toBe(
+      true
+    );
   });
 
   test('MCP memory_add writes enabled sync files automatically', async () => {
@@ -523,6 +533,8 @@ describe('CLI, API, and MCP mutation entrypoints', () => {
     });
 
     expect(result.isError).not.toBe(true);
-    expect(existsSync(join(getSpaceSyncDir(root, 'projects/test'), 'mcp-memory.md'))).toBe(true);
+    expect(existsSync(join(getSpaceSyncDir(root, 'projects/test', store), 'mcp-memory.md'))).toBe(
+      true
+    );
   });
 });

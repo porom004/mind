@@ -99,9 +99,10 @@ export function createSqliteStore(dbPath: string): MindStore {
 
   // Sync: create a partial store-like object for FileSyncService
   const syncStore = {
+    getSpace: (name: string) => spaceRepo.getSpace(name),
     listMemories: (space: string, filter?: any) => memoryRepo.listMemories(space, filter),
-    getMemoryById: (id: number) => memoryRepo.getMemoryById(id),
-    getLinks: (memoryId: number) => linkRepo.getLinks(memoryId),
+    getMemoryById: (id: string) => memoryRepo.getMemoryById(id),
+    getLinks: (memoryId: string) => linkRepo.getLinks(memoryId),
     queryMemories: (filter?: any) => searchRepo.queryMemories(filter),
   };
   const fileSyncService = new FileSyncService(syncStore);
@@ -109,7 +110,7 @@ export function createSqliteStore(dbPath: string): MindStore {
   // ── Build MindStore interface (flat object for backward compatibility) ──
 
   function getStatus(space?: string): StatusResult {
-    const spaceFilter = space ? 'WHERE space_name = ?' : '';
+    const spaceFilter = space ? 'WHERE s.name = ?' : '';
     const spaceParams: any[] = space ? [space] : [];
 
     const total_spaces = space
@@ -117,7 +118,11 @@ export function createSqliteStore(dbPath: string): MindStore {
       : (db.query('SELECT COUNT(*) as c FROM spaces').get() as { c: number }).c;
 
     const total_memories = (
-      db.query(`SELECT COUNT(*) as c FROM memories ${spaceFilter}`).get(...spaceParams) as {
+      db
+        .query(
+          `SELECT COUNT(*) as c FROM memories m JOIN spaces s ON s.id = m.space_id ${spaceFilter}`
+        )
+        .get(...spaceParams) as {
         c: number;
       }
     ).c;
@@ -125,7 +130,7 @@ export function createSqliteStore(dbPath: string): MindStore {
     const tierRows = db
       .query(
         `SELECT tier, COUNT(*) as count, SUM(pinned) as pinned
-                 FROM memories ${spaceFilter}
+                 FROM memories m JOIN spaces s ON s.id = m.space_id ${spaceFilter}
                  GROUP BY tier
                  ORDER BY tier`
       )
@@ -146,10 +151,11 @@ export function createSqliteStore(dbPath: string): MindStore {
     }
 
     // Count memories with embeddings
-    let embedSql = 'SELECT COUNT(*) as c FROM memories WHERE embedding IS NOT NULL';
+    let embedSql =
+      'SELECT COUNT(*) as c FROM memories m JOIN spaces s ON s.id = m.space_id WHERE embedding IS NOT NULL';
     const embedParams: any[] = [];
     if (space) {
-      embedSql += ' AND space_name = ?';
+      embedSql += ' AND s.name = ?';
       embedParams.push(space);
     }
     const embeddings_indexed = (db.query(embedSql).get(...embedParams) as { c: number }).c;

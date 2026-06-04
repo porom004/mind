@@ -1,14 +1,14 @@
 // ── AutoSyncService: manages file watchers and imports external changes to DB ──
 
-import { mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 import type { MindStore } from '../store/mind-store';
 
-import { loadConfig, saveConfig as _saveConfig } from './config-file';
+import { loadConfig } from './config-file';
 import { FileWatcher } from './file-watcher';
 import { importMarkdownFile } from './importer';
-import { getSyncBasePath, getSpaceDir } from './normalize';
+import { getSpaceDir, getSyncBasePath } from './normalize';
 import type { FileEvent, SpaceSyncConfig } from './types';
 
 const SYNC_METADATA_DIR = '.mind-sync';
@@ -50,10 +50,11 @@ function getSpaceSyncConfig(projectRoot: string, space: string): SpaceSyncConfig
  * Get all enabled sync configs from the file-based config.
  */
 function getEnabledSyncConfigs(
-  projectRoot: string
+  projectRoot: string,
+  store: { getSpace: (name: string) => { id?: string } | null }
 ): Array<{ spaceName: string; config: SpaceSyncConfig; basePath: string }> {
-  const basePath = getSyncBasePath(projectRoot);
-  const config = loadConfig(basePath);
+  const syncBasePath = getSyncBasePath(projectRoot);
+  const config = loadConfig(syncBasePath);
   if (!config) {
     return [];
   }
@@ -63,7 +64,7 @@ function getEnabledSyncConfigs(
     .map(([spaceName, spaceConfig]) => ({
       spaceName,
       config: spaceConfig,
-      basePath: getSpaceDir(basePath, spaceName),
+      basePath: getSpaceDir(syncBasePath, spaceName, store),
     }));
 }
 
@@ -99,7 +100,7 @@ export class AutoSyncService {
       throw new Error(`Sync is not enabled for space "${space}". Run "sync enable" first.`);
     }
 
-    const basePath = getSpaceDir(getSyncBasePath(this.projectRoot), space);
+    const basePath = getSpaceDir(getSyncBasePath(this.projectRoot), space, this.store);
     if (!existsSync(basePath)) {
       throw new Error(`Sync directory does not exist: ${basePath}`);
     }
@@ -226,7 +227,7 @@ export class AutoSyncService {
    * Returns true if the file was recently written by us and should be skipped.
    */
   private isFromSync(filePath: string): boolean {
-    const configs = getEnabledSyncConfigs(this.projectRoot);
+    const configs = getEnabledSyncConfigs(this.projectRoot, this.store);
 
     for (const { basePath } of configs) {
       const markerPath = join(basePath, SYNC_METADATA_DIR, LOCK_FILE);
@@ -271,7 +272,7 @@ export class AutoSyncService {
     space: string
   ): Promise<{ imported: number; updated: number; failed: number; errors: string[] }> {
     const result = { imported: 0, updated: 0, failed: 0, errors: [] as string[] };
-    const basePath = getSpaceDir(getSyncBasePath(this.projectRoot), space);
+    const basePath = getSpaceDir(getSyncBasePath(this.projectRoot), space, this.store);
 
     if (!existsSync(basePath)) {
       result.errors.push(`Directory does not exist: ${basePath}`);
@@ -310,7 +311,7 @@ export class AutoSyncService {
  */
 export async function startAutosyncWatchers(store: MindStore, projectRoot?: string): Promise<void> {
   const autoSync = new AutoSyncService(store, projectRoot);
-  const enabledSpaces = getEnabledSyncConfigs(projectRoot ?? process.cwd());
+  const enabledSpaces = getEnabledSyncConfigs(projectRoot ?? process.cwd(), store);
 
   if (enabledSpaces.length === 0) return;
 
