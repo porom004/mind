@@ -1,21 +1,24 @@
 // ── SQLite implementation of MindStore ──
 // Refactored to use Repository Factory pattern internally while maintaining MindStore interface
 
-import { existsSync, statSync, copyFileSync, unlinkSync } from 'fs';
+import { copyFileSync, existsSync, statSync, unlinkSync } from 'fs';
 
 import { Database } from 'bun:sqlite';
 
 import { isRagEnabled } from '../helpers/rag';
-import type { Tier, StatusResult } from '../types';
+import { FileSyncService } from '../sync';
+import { withAutoExport } from '../sync/auto-export-store';
+import type { StatusResult, Tier } from '../types';
 
+import { openDatabaseWithSafeMigrations } from './migration-safety';
 import type { MindStore } from './mind-store';
 import {
-  createTagRepository,
   createLinkRepository,
   createLogRepository,
-  createSpaceRepository,
   createMemoryRepository,
   createSearchRepository,
+  createSpaceRepository,
+  createTagRepository,
   subscribeToLogs,
   unsubscribeFromLogs,
 } from './repositories';
@@ -68,8 +71,7 @@ function ensureIntegrity(db: Database, dbPath: string): boolean {
 }
 
 export function createSqliteStore(dbPath: string): MindStore {
-  let db = new Database(dbPath, { create: true });
-  initializeDatabase(db);
+  let db = openDatabaseWithSafeMigrations(dbPath);
 
   if (!ensureIntegrity(db, dbPath)) {
     // Corrupt DB was backed up and removed — create fresh
@@ -95,10 +97,20 @@ export function createSqliteStore(dbPath: string): MindStore {
   // Search (depends on Memory, Tag)
   const searchRepo = createSearchRepository(db, memoryRepo, tagRepo);
 
+  // Sync: create a partial store-like object for FileSyncService
+  const syncStore = {
+    getSpace: (name: string) => spaceRepo.getSpace(name),
+    listMemories: (space: string, filter?: any) => memoryRepo.listMemories(space, filter),
+    getMemoryById: (id: string) => memoryRepo.getMemoryById(id),
+    getLinks: (memoryId: string) => linkRepo.getLinks(memoryId),
+    queryMemories: (filter?: any) => searchRepo.queryMemories(filter),
+  };
+  const fileSyncService = new FileSyncService(syncStore);
+
   // ── Build MindStore interface (flat object for backward compatibility) ──
 
   function getStatus(space?: string): StatusResult {
-    const spaceFilter = space ? 'WHERE space_name = ?' : '';
+    const spaceFilter = space ? 'WHERE s.name = ?' : '';
     const spaceParams: any[] = space ? [space] : [];
 
     const total_spaces = space
@@ -106,7 +118,11 @@ export function createSqliteStore(dbPath: string): MindStore {
       : (db.query('SELECT COUNT(*) as c FROM spaces').get() as { c: number }).c;
 
     const total_memories = (
-      db.query(`SELECT COUNT(*) as c FROM memories ${spaceFilter}`).get(...spaceParams) as {
+      db
+        .query(
+          `SELECT COUNT(*) as c FROM memories m JOIN spaces s ON s.id = m.space_id ${spaceFilter}`
+        )
+        .get(...spaceParams) as {
         c: number;
       }
     ).c;
@@ -114,7 +130,7 @@ export function createSqliteStore(dbPath: string): MindStore {
     const tierRows = db
       .query(
         `SELECT tier, COUNT(*) as count, SUM(pinned) as pinned
-                 FROM memories ${spaceFilter}
+                 FROM memories m JOIN spaces s ON s.id = m.space_id ${spaceFilter}
                  GROUP BY tier
                  ORDER BY tier`
       )
@@ -135,10 +151,11 @@ export function createSqliteStore(dbPath: string): MindStore {
     }
 
     // Count memories with embeddings
-    let embedSql = 'SELECT COUNT(*) as c FROM memories WHERE embedding IS NOT NULL';
+    let embedSql =
+      'SELECT COUNT(*) as c FROM memories m JOIN spaces s ON s.id = m.space_id WHERE embedding IS NOT NULL';
     const embedParams: any[] = [];
     if (space) {
-      embedSql += ' AND space_name = ?';
+      embedSql += ' AND s.name = ?';
       embedParams.push(space);
     }
     const embeddings_indexed = (db.query(embedSql).get(...embedParams) as { c: number }).c;
@@ -163,7 +180,7 @@ export function createSqliteStore(dbPath: string): MindStore {
     db.close();
   }
 
-  return {
+  const store: MindStore = {
     // Spaces
     createSpace: (name, description, tags) => spaceRepo.createSpace(name, description, tags),
     getSpace: name => spaceRepo.getSpace(name),
@@ -182,6 +199,7 @@ export function createSqliteStore(dbPath: string): MindStore {
     getHotMemories: space => memoryRepo.getHotMemories(space),
     resolveMemoryRef: ref => memoryRepo.resolveMemoryRef(ref),
     updateMemory: (id, updates) => memoryRepo.updateMemory(id, updates),
+    moveMemory: (id, updates) => memoryRepo.moveMemory(id, updates),
     deleteMemory: id => memoryRepo.deleteMemory(id),
     deleteMemoryByName: (space, name) => memoryRepo.deleteMemoryByName(space, name),
     recordAccess: id => memoryRepo.recordAccess(id),
@@ -226,7 +244,12 @@ export function createSqliteStore(dbPath: string): MindStore {
     subscribeToLogs,
     unsubscribeFromLogs,
 
+    // Sync operations (Phase 1: export only)
+    exportSpaceToFiles: (space, basePath) => fileSyncService.exportSpaceToFiles(space, basePath),
+
     // Lifecycle
     close,
   };
+
+  return withAutoExport(store, { source: 'cli' });
 }

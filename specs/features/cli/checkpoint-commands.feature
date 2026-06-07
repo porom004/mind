@@ -25,16 +25,16 @@ Feature: CLI Checkpoint Commands
 
   Rule: checkpoint complete command
 
-    Scenario: checkpoint complete transforms checkpoint into session memory
+    Scenario: checkpoint complete transforms checkpoint into same-space session memory
       Given an active checkpoint in "projects/test" with goal "Implement login" and pending "Add OAuth"
       When running "./mind checkpoint complete projects/test my-checkpoint \"Added OAuth\""
-      Then a session memory is created in "sessions/test"
+      Then a session memory is created in "projects/test"
       And the checkpoint is deleted from "projects/test"
 
     Scenario: checkpoint done is alias for complete
       Given an active checkpoint in "projects/test" with goal "Fix bug" and pending "Write tests"
       When running "./mind checkpoint done projects/test my-checkpoint \"Summary\""
-      Then a session memory is created in "sessions/test"
+      Then a session memory is created in "projects/test"
       And the checkpoint is deleted from "projects/test"
 
   Rule: checkpoint recover command
@@ -75,5 +75,5 @@ Feature: CLI Checkpoint Commands
     Scenario: cp done works as alias
       Given an active checkpoint in "projects/test" with goal "Alias test" and pending "Verify"
       When running "./mind cp done projects/test my-checkpoint \"Summary\""
-      Then a session memory is created in "sessions/test"
+      Then a session memory is created in "projects/test"
       And the checkpoint is deleted from "projects/test"

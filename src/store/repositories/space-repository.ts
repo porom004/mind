@@ -1,10 +1,10 @@
-// ── SpaceRepository: handles all space operations ──
+// ── SpaceRepository: handles all space operations (v8: UUID primary keys) ──
 
 import type { Database } from 'bun:sqlite';
 
 import { normalizeTag, normalizeTags } from '../../helpers/tags';
 import type { Space, SpaceSummary } from '../../types';
-import { FtsHelper } from '../shared';
+import { FtsHelper, generateUuid, now } from '../shared';
 
 export interface SpaceRepository {
   createSpace(name: string, description: string, tags?: string[]): void;
@@ -33,13 +33,12 @@ export function createSpaceRepository(db: Database, fts: FtsHelper): SpaceReposi
     const existing = db.query('SELECT 1 FROM spaces WHERE name = ?').get(name);
     if (existing) throw new Error(`Space "${name}" already exists`);
 
-    const ts = new Date().toISOString().replace('T', ' ').replace('Z', '').split('.')[0]!;
-    db.run('INSERT INTO spaces (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)', [
-      name,
-      description,
-      ts,
-      ts,
-    ]);
+    const ts = now();
+    const id = generateUuid();
+    db.run(
+      'INSERT INTO spaces (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      [id, name, description, ts, ts]
+    );
 
     if (tags && tags.length > 0) {
       const normalizedTags = normalizeTags(tags);
@@ -54,6 +53,7 @@ export function createSpaceRepository(db: Database, fts: FtsHelper): SpaceReposi
     const row = db.query('SELECT * FROM spaces WHERE name = ?').get(name) as any;
     if (!row) return null;
     return {
+      id: row.id,
       name: row.name,
       description: row.description,
       hidden: row.hidden === 1,
@@ -72,8 +72,8 @@ export function createSpaceRepository(db: Database, fts: FtsHelper): SpaceReposi
     if (filter?.tag) {
       const normalizedFilter = normalizeTag(filter.tag);
       sql = `
-                SELECT s.name, s.description, s.hidden,
-                       (SELECT COUNT(*) FROM memories m WHERE m.space_name = s.name) AS memory_count
+                SELECT s.id, s.name, s.description, s.hidden,
+                       (SELECT COUNT(*) FROM memories m WHERE m.space_id = s.id) AS memory_count
                 FROM spaces s
                 JOIN space_tags st ON st.space_name = s.name AND st.tag = ?
                 ${includeHidden ? '' : 'WHERE s.hidden = 0'}
@@ -82,8 +82,8 @@ export function createSpaceRepository(db: Database, fts: FtsHelper): SpaceReposi
       params = [normalizedFilter];
     } else {
       sql = `
-                SELECT s.name, s.description, s.hidden,
-                       (SELECT COUNT(*) FROM memories m WHERE m.space_name = s.name) AS memory_count
+                SELECT s.id, s.name, s.description, s.hidden,
+                       (SELECT COUNT(*) FROM memories m WHERE m.space_id = s.id) AS memory_count
                 FROM spaces s
                 ${includeHidden ? '' : 'WHERE s.hidden = 0'}
                 ORDER BY s.name
@@ -106,7 +106,7 @@ export function createSpaceRepository(db: Database, fts: FtsHelper): SpaceReposi
     if (!row)
       throw new Error(`Space "${name}" does not exist. Create it first with space_create tool.`);
 
-    const ts = new Date().toISOString().replace('T', ' ').replace('Z', '').split('.')[0]!;
+    const ts = now();
     if (updates.description !== undefined) {
       db.run('UPDATE spaces SET description = ?, updated_at = ? WHERE name = ?', [
         updates.description,
@@ -124,15 +124,17 @@ export function createSpaceRepository(db: Database, fts: FtsHelper): SpaceReposi
   }
 
   function deleteSpace(name: string): void {
-    const row = db.query('SELECT 1 FROM spaces WHERE name = ?').get(name);
-    if (!row)
+    const space = db.query('SELECT id FROM spaces WHERE name = ?').get(name) as {
+      id: string;
+    } | null;
+    if (!space)
       throw new Error(`Space "${name}" does not exist. Create it first with space_create tool.`);
 
     // Clean FTS entries before cascade delete removes memories
-    const mems = db.query('SELECT id FROM memories WHERE space_name = ?').all(name) as {
-      id: number;
+    const mems = db.query('SELECT fts_id FROM memories WHERE space_id = ?').all(space.id) as {
+      fts_id: number;
     }[];
-    for (const m of mems) fts.delete(m.id);
+    for (const m of mems) fts.delete(m.fts_id);
     db.run('DELETE FROM spaces WHERE name = ?', [name]);
   }
 
@@ -144,8 +146,10 @@ export function createSpaceRepository(db: Database, fts: FtsHelper): SpaceReposi
     const existing = db.query('SELECT 1 FROM spaces WHERE name = ?').get(newName);
     if (existing) throw new Error(`Space "${newName}" already exists`);
 
-    const ts = new Date().toISOString().replace('T', ' ').replace('Z', '').split('.')[0]!;
+    const ts = now();
     db.run('UPDATE spaces SET name = ?, updated_at = ? WHERE name = ?', [newName, ts, oldName]);
+    // space_tags has ON UPDATE CASCADE on spaces(name), so tags auto-update.
+    // Memories use space_id (UUID) so no cascading needed on rename.
   }
 
   function addSpaceTag(space: string, tag: string): void {

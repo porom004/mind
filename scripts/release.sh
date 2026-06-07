@@ -2,10 +2,16 @@
 set -euo pipefail
 
 TYPE="${1:-}"
-MODE="${2:-}"
+if [ $# -gt 0 ]; then
+  shift
+fi
+
+usage() {
+  echo "Usage: ./scripts/release.sh <patch|minor|major> [--simulate] [--notes-file <path>]"
+}
 
 if [ -z "$TYPE" ]; then
-  echo "Usage: ./scripts/release.sh <patch|minor|major> [--simulate]"
+  usage
   exit 1
 fi
 
@@ -16,9 +22,29 @@ if [ "$TYPE" != "patch" ] && [ "$TYPE" != "minor" ] && [ "$TYPE" != "major" ]; t
 fi
 
 SIMULATE=0
-if [ "$MODE" = "--simulate" ]; then
-  SIMULATE=1
-fi
+NOTES_FILE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --simulate)
+      SIMULATE=1
+      shift
+      ;;
+    --notes-file)
+      if [ -z "${2:-}" ]; then
+        echo "Missing value for --notes-file"
+        usage
+        exit 1
+      fi
+      NOTES_FILE="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown option: $1"
+      usage
+      exit 1
+      ;;
+  esac
+done
 
 run_cmd() {
   if [ "$SIMULATE" -eq 1 ]; then
@@ -195,6 +221,32 @@ write_version() {
   bun -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json','utf8')); p.version='${new_version}'; fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');"
 }
 
+write_package_lock_version() {
+  local new_version="$1"
+  if [ ! -f "package-lock.json" ]; then
+    return
+  fi
+
+  if [ "$SIMULATE" -eq 1 ]; then
+    echo "[simulate] update package-lock.json version -> ${new_version}"
+    return
+  fi
+
+  bun -e '
+    const fs = require("fs");
+    const version = process.argv[1];
+    const file = "package-lock.json";
+    const lock = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (Object.prototype.hasOwnProperty.call(lock, "version")) {
+      lock.version = version;
+    }
+    if (lock.packages?.[""] && Object.prototype.hasOwnProperty.call(lock.packages[""], "version")) {
+      lock.packages[""].version = version;
+    }
+    fs.writeFileSync(file, JSON.stringify(lock, null, 2) + "\n");
+  ' "$new_version"
+}
+
 main() {
   require_cmd git
   require_cmd bun
@@ -234,14 +286,23 @@ main() {
 
   run_cmd bun test test/
   write_version "$next_version"
+  write_package_lock_version "$next_version"
   promote_changelog_release "$next_version"
 
-  run_cmd git add package.json CHANGELOG.md
+  local release_files=(package.json CHANGELOG.md)
+  if [ -f "package-lock.json" ]; then
+    release_files=(package.json package-lock.json CHANGELOG.md)
+  fi
+  run_cmd git add "${release_files[@]}"
   run_cmd git commit -m "chore(release): ${tag}"
   run_cmd git tag "$tag"
   run_cmd git push origin main
   run_cmd git push origin "$tag"
-  run_cmd gh release create "$tag" --title "$tag" --generate-notes
+  local notes_args=(--generate-notes)
+  if [ -n "$NOTES_FILE" ]; then
+    notes_args=(--notes-file "$NOTES_FILE")
+  fi
+  run_cmd gh release create "$tag" --title "$tag" "${notes_args[@]}"
 
   if [ "$SIMULATE" -eq 1 ]; then
     echo "[simulate] release flow complete (no changes were applied)"

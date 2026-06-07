@@ -1,4 +1,5 @@
 import { getAgentCapabilities, type Agent, type CapabilityMap } from '../cli/capabilities';
+import { isSessionLikeMemory } from '../helpers/session-summary';
 import type { MindStore } from '../store/mind-store';
 
 export type RecoveryFormat = 'text' | 'md' | 'json';
@@ -55,6 +56,28 @@ function checkpointQuery(content: CheckpointContent): string {
   return [goal, pending, notes].filter(Boolean).join(' ');
 }
 
+async function loadSessionHistory(store: MindStore, space: string) {
+  const total = await store.queryMemoriesCount({ space });
+  const memories = [] as ReturnType<MindStore['queryMemories']>;
+
+  for (let offset = 0; offset < total; offset += 500) {
+    const batch = store.queryMemories({
+      space,
+      limit: 500,
+      offset,
+    });
+
+    for (const memory of batch) {
+      const fullMemory = store.getMemoryById(memory.id);
+      if (fullMemory && isSessionLikeMemory(fullMemory)) {
+        memories.push(memory);
+      }
+    }
+  }
+
+  return memories;
+}
+
 export async function buildRecoveryPack(
   store: MindStore,
   args: { space: string; includeHistory?: boolean; agent?: Agent }
@@ -75,15 +98,20 @@ export async function buildRecoveryPack(
     const allCheckpoints = store.listMemories(space, { tag: 'checkpoint' });
     let candidates = allCheckpoints.filter(memory => memory.tags.includes('active'));
 
-    // When includeHistory=true, look for session memories in sessions/<repo>
-    // (completed checkpoints are deleted and transformed into session memories)
+    // When includeHistory=true, look for same-space session summaries first.
     if (args.includeHistory) {
-      const sessionSpaceName = space.startsWith('projects/')
-        ? `sessions/${space.slice('projects/'.length)}`
-        : `sessions/${space}`;
+      const sameSpaceSessions = await loadSessionHistory(store, space);
+      if (sameSpaceSessions.length > 0) {
+        candidates = [...candidates, ...sameSpaceSessions];
+      } else {
+        const sessionSpaceName = space.startsWith('projects/')
+          ? `sessions/${space.slice('projects/'.length)}`
+          : `sessions/${space}`;
 
-      const sessionMemories = store.listMemories(sessionSpaceName, { tag: 'type:session' });
-      candidates = [...candidates, ...sessionMemories];
+        if (store.getSpace(sessionSpaceName)) {
+          candidates = [...candidates, ...(await loadSessionHistory(store, sessionSpaceName))];
+        }
+      }
     }
 
     candidates.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());

@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -147,6 +148,11 @@ describe('MCP input schema fidelity', () => {
     const dbPath = join(tempDir, 'mind.db');
     const originalDbPath = process.env.MIND_DB_PATH;
 
+    // Use absolute path to avoid "Module not found" when cwd differs
+    const testDir = fileURLToPath(new URL('.', import.meta.url));
+    const projectRoot = join(testDir, '..');
+    const mindPath = join(projectRoot, 'src', 'mind.ts');
+
     let client: Client | undefined;
     let transport: StdioClientTransport | undefined;
 
@@ -154,7 +160,7 @@ describe('MCP input schema fidelity', () => {
       process.env.MIND_DB_PATH = dbPath;
       transport = new StdioClientTransport({
         command: process.execPath,
-        args: ['run', 'src/mind.ts', 'mcp'],
+        args: ['run', mindPath, 'mcp'],
         env: {
           ...process.env,
           MIND_DB_PATH: dbPath,
@@ -163,6 +169,8 @@ describe('MCP input schema fidelity', () => {
       client = new Client({ name: 'mind-tools-list-test', version: '1.0.0' });
 
       await client.connect(transport);
+      // Wait for server to be fully initialized (helps under resource contention in full suite)
+      await Bun.sleep(50);
 
       const { tools } = await client.listTools();
       const listedTools = tools as ListedTool[];
@@ -505,10 +513,7 @@ describe('MCP Checkpoint Tools', () => {
     ).rejects.toThrow('checkpointName is required');
   });
 
-  test('checkpoint_done should mark as completed and demote (old behavior - Phase 2 changes this)', async () => {
-    // NOTE: This test describes the OLD behavior. Phase 2 changes checkpoint_done to
-    // transform the checkpoint into a session memory in sessions/<repo>.
-    // This test is kept for reference but the behavior has changed.
+  test('checkpoint_done should create a same-space T3 session summary', async () => {
     store = createTestStore();
     store.createSpace('myproject', 'A project', ['test']);
 
@@ -526,12 +531,15 @@ describe('MCP Checkpoint Tools', () => {
       summary: 'Fixed the bug',
     });
 
-    // New behavior: creates session memory in sessions/myproject
+    // New behavior: creates session memory in the same project space
     expect(res.session_memory).toBeDefined();
-    expect(res.session_memory?.space).toBe('sessions/myproject');
+    expect(res.session_memory?.space).toBe('myproject');
     expect(res.session_memory?.tags).toContain('type:session');
     expect(res.session_memory?.tags).toContain('cat:summary');
-    expect((res as any).structuredContent?.session_memory?.space).toBe('sessions/myproject');
+    expect((res as any).structuredContent?.session_memory?.space).toBe('myproject');
+
+    const sessionMemory = store.getMemory('myproject', res.session_memory!.name);
+    expect(sessionMemory?.tier).toBe(3);
   });
 
   test('checkpoint_query should list all checkpoints', async () => {
@@ -561,6 +569,30 @@ describe('MCP Checkpoint Tools', () => {
 
     // After Phase 2, checkpoint is deleted, so list should be empty
     expect(res.checkpoints.length).toBe(0);
+  });
+
+  test('checkpoint_query stays strict and does not treat session-like memories as checkpoints', async () => {
+    store = createTestStore();
+    store.createSpace('myproject', 'A project', ['test']);
+    await store.addMemory(
+      'myproject',
+      'session-2026-04-24T11-00-00Z',
+      JSON.stringify({
+        goal: 'historical goal',
+        pending: 'historical pending',
+      }),
+      {
+        tags: ['type:session', 'cat:summary'],
+        tier: 3,
+      }
+    );
+
+    const tools = createCheckpointTools(store);
+    const res = await tools.checkpoint_query.handler({
+      space: 'myproject',
+    });
+
+    expect(res.checkpoints).toEqual([]);
   });
 
   test('checkpoint_save with related memories should create links', async () => {
@@ -1018,7 +1050,7 @@ describe('MCP Search Tool Removed (Phase 1b Step 2)', () => {
 });
 
 describe('MCP Checkpoint Tools - Session Transformation (Phase 2)', () => {
-  test('checkpoint_done creates session memory in sessions/<repo> and deletes checkpoint', async () => {
+  test('checkpoint_done creates a T3 session memory in the project space and deletes checkpoint', async () => {
     store = createTestStore();
     store.createSpace('projects/mind', 'Mind project', ['test']);
     await store.addMemory('projects/mind', 'memory-1', 'content 1', { tags: ['cat:decision'] });
@@ -1040,23 +1072,23 @@ describe('MCP Checkpoint Tools - Session Transformation (Phase 2)', () => {
       summary: 'Finished the API refactor',
     });
 
-    // Session memory should be created in sessions/mind
-    const sessionsSpace = store.getSpace('sessions/mind');
-    expect(sessionsSpace).not.toBeNull();
+    // Session memory should be created in projects/mind
+    expect(store.getSpace('sessions/mind')).toBeNull();
 
     // Get the session memory
-    const sessionMemories = store.queryMemories({ space: 'sessions/mind' });
+    const sessionMemories = store.queryMemories({ space: 'projects/mind', tag: 'type:session' });
     expect(sessionMemories.length).toBe(1);
     const sessionMemory = sessionMemories[0]!;
     expect(sessionMemory.tags).toContain('type:session');
     expect(sessionMemory.tags).toContain('cat:summary');
+    expect(sessionMemory.tier).toBe(3);
 
     // Original checkpoint should be deleted
     const checkpoints = store.listMemories('projects/mind', { tag: 'checkpoint' });
     expect(checkpoints.length).toBe(0);
 
     // Session memory should have links to memory-1 and memory-2
-    const sessionFull = store.getMemory('sessions/mind', sessionMemory.name)!;
+    const sessionFull = store.getMemory('projects/mind', sessionMemory.name)!;
     const links = store.getLinks(sessionFull.id);
     expect(links.length).toBe(2);
   });
@@ -1080,15 +1112,15 @@ describe('MCP Checkpoint Tools - Session Transformation (Phase 2)', () => {
       summary: 'Task completed',
     });
 
-    // Session memory should be created in sessions/mind
-    const sessionsSpace = store.getSpace('sessions/mind');
-    expect(sessionsSpace).not.toBeNull();
+    // Session memory should be created in projects/mind
+    expect(store.getSpace('sessions/mind')).toBeNull();
 
     // Get the session memory
-    const sessionMemories = store.queryMemories({ space: 'sessions/mind' });
+    const sessionMemories = store.queryMemories({ space: 'projects/mind', tag: 'type:session' });
     expect(sessionMemories.length).toBe(1);
     expect(sessionMemories[0]!.tags).toContain('type:session');
     expect(sessionMemories[0]!.tags).toContain('cat:summary');
+    expect(sessionMemories[0]!.tier).toBe(3);
   });
 
   test('calling checkpoint_done twice returns error on second call', async () => {
@@ -1118,7 +1150,7 @@ describe('MCP Checkpoint Tools - Session Transformation (Phase 2)', () => {
     ).rejects.toThrow('No active checkpoint found');
 
     // Should only have one session memory (not two)
-    const sessionMemories = store.queryMemories({ space: 'sessions/mind' });
+    const sessionMemories = store.queryMemories({ space: 'projects/mind', tag: 'type:session' });
     expect(sessionMemories.length).toBe(1);
   });
 });

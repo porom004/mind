@@ -2,11 +2,12 @@ import { runApiServer } from '../../api/server';
 import { startMcpHttpServer, startMcpServer } from '../../mcp/server';
 import type { MindStore } from '../../store/mind-store';
 import { ArgParser } from '../arg-parser';
-import { getSupportedAgents } from '../capabilities';
+import { getSupportedAgents, type SupportedAgent } from '../capabilities';
 import { runUpdateCommand } from '../self-update';
 import {
   listAgents,
   runSetup,
+  runSetupRefresh,
   startMcpDetached,
   startServeDetached,
   statusServers,
@@ -35,6 +36,15 @@ const SERVE_START = new ArgParser(['serve|server|web', 'start'], 'Starts web HTT
 const SERVE_STOP = new ArgParser(['serve|server|web', 'stop'], 'Stops web HTTP server');
 
 const SETUP = new ArgParser(['setup|install'], 'Lists supported agents for setup');
+const SETUP_REFRESH = new ArgParser(
+  ['setup|install', 'refresh'],
+  'Refreshes mind-managed agent integrations',
+  [
+    { name: 'dry-run', hasValue: false, description: 'show what would be refreshed' },
+    { name: 'all', hasValue: false, description: 'refresh all supported agents' },
+    { name: 'agent', hasValue: true, description: 'refresh one agent only' },
+  ]
+);
 const SETUP_AGENT = new ArgParser(
   ['setup|install', p('agent')],
   `Setup agent MCP integration.\n\tSupported agents: ${getSupportedAgents().join(', ')}`
@@ -44,6 +54,11 @@ const UPDATE = new ArgParser(['update'], 'Updates mind from GitHub releases', [
   { name: 'check', hasValue: false, description: 'check if update is available' },
   { name: 'version', hasValue: true, description: 'install a specific release tag' },
   { name: 'repo', hasValue: true, description: 'override GitHub repo' },
+  {
+    name: 'no-refresh-integrations',
+    hasValue: false,
+    description: 'skip detected integration refresh after install',
+  },
 ]);
 
 async function runMcpForeground(
@@ -72,6 +87,7 @@ export const runtimeGroup: CommandGroup = {
     MCP_STOP,
     SERVE_START,
     SERVE_STOP,
+    SETUP_REFRESH,
     SETUP_AGENT,
     UPDATE,
   ],
@@ -121,6 +137,17 @@ export const runtimeGroup: CommandGroup = {
       matches: args => SERVE_STOP.matches(args),
       execute: async () => {
         await stopServe();
+      },
+    },
+    {
+      matches: args => SETUP_REFRESH.matches(args),
+      execute: async args => {
+        const flags = SETUP_REFRESH.getFlags(args);
+        await runSetupRefresh({
+          mode: flags.all ? 'all' : 'detected',
+          agent: typeof flags.agent === 'string' ? (flags.agent as SupportedAgent) : undefined,
+          dryRun: !!flags['dry-run'],
+        });
       },
     },
     {

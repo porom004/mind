@@ -8,10 +8,11 @@ export class FtsHelper {
 
   /**
    * Insert a memory into the FTS index.
+   * @param ftsId - the integer surrogate for FTS5 rowid (not the UUID primary key)
    */
-  insert(id: number, name: string, content: string): void {
+  insert(ftsId: number, name: string, content: string): void {
     this.db.run('INSERT INTO memories_fts(rowid, name, content) VALUES (?, ?, ?)', [
-      id,
+      ftsId,
       name,
       content,
     ]);
@@ -19,16 +20,18 @@ export class FtsHelper {
 
   /**
    * Delete a memory from the FTS index.
+   * @param ftsId - the integer surrogate for FTS5 rowid
    */
-  delete(id: number): void {
-    this.db.run('DELETE FROM memories_fts WHERE rowid = ?', [id]);
+  delete(ftsId: number): void {
+    this.db.run('DELETE FROM memories_fts WHERE rowid = ?', [ftsId]);
   }
 
   /**
    * Update a memory in the FTS index (delete + insert).
+   * @param ftsId - the integer surrogate for FTS5 rowid
    */
-  update(id: number, name: string, content: string): void {
-    this.delete(id);
-    this.insert(id, name, content);
+  update(ftsId: number, name: string, content: string): void {
+    this.delete(ftsId);
+    this.insert(ftsId, name, content);
   }
 }

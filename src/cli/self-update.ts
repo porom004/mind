@@ -1,6 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { CONFIG } from '../config';
+
+import { runSetupRefresh } from './setup';
+
 interface ReleaseInfo {
   tag_name: string;
 }
@@ -13,6 +17,10 @@ export function getRootPath(): string {
 
 export function getInstallerPath(): string {
   return path.join(getRootPath(), 'scripts', 'install.sh');
+}
+
+export function getLauncherPath(): string {
+  return path.join(getRootPath(), 'mind');
 }
 
 export function getCurrentVersion(): string {
@@ -46,10 +54,16 @@ async function getLatestTag(repo: string): Promise<string> {
   return data.tag_name;
 }
 
-function parseArgs(args: string[]): { check: boolean; version?: string; repo: string } {
+export function parseUpdateArgs(args: string[]): {
+  check: boolean;
+  version?: string;
+  repo: string;
+  refreshIntegrations: boolean;
+} {
   let check = false;
   let version: string | undefined;
   let repo = DEFAULT_REPO;
+  let refreshIntegrations = true;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -67,39 +81,79 @@ function parseArgs(args: string[]): { check: boolean; version?: string; repo: st
       i++;
       continue;
     }
+    if (arg === '--no-refresh-integrations') {
+      refreshIntegrations = false;
+      continue;
+    }
   }
 
-  return { check, version, repo };
+  return { check, version, repo, refreshIntegrations };
 }
 
 export async function runUpdateCommand(args: string[]): Promise<void> {
-  const { check, version, repo } = parseArgs(args);
+  await runUpdateCommandWithDependencies(args, {
+    getCurrentVersion,
+    getLatestTag,
+    getInstallerPath,
+    getDbPath: () => CONFIG.dbPath,
+    getLauncherPath,
+    existsSync: fs.existsSync,
+    spawn: (command, options) => Bun.spawn(command, options),
+    runSetupRefresh,
+    log: message => console.log(message),
+    env: process.env,
+  });
+}
 
-  const current = getCurrentVersion();
-  const target = version ?? (await getLatestTag(repo));
+interface UpdateCommandDependencies {
+  getCurrentVersion: () => string;
+  getLatestTag: (repo: string) => Promise<string>;
+  getInstallerPath: () => string;
+  getDbPath: () => string;
+  getLauncherPath: () => string;
+  existsSync: (target: string) => boolean;
+  spawn: (
+    command: string[],
+    options: { env?: Record<string, string | undefined>; stdio: ['ignore', 'inherit', 'inherit'] }
+  ) => { exited: Promise<number> };
+  runSetupRefresh: (options: { mode: 'detected' }) => Promise<unknown>;
+  log: (message: string) => void;
+  env: Record<string, string | undefined>;
+}
 
-  console.log(`Current version: ${current}`);
-  console.log(`Target version:  ${target}`);
+export async function runUpdateCommandWithDependencies(
+  args: string[],
+  deps: UpdateCommandDependencies
+): Promise<void> {
+  const { check, version, repo, refreshIntegrations } = parseUpdateArgs(args);
+
+  const current = deps.getCurrentVersion();
+  const target = version ?? (await deps.getLatestTag(repo));
+
+  deps.log(`Current version: ${current}`);
+  deps.log(`Target version:  ${target}`);
 
   if (check) {
     if (current === target.replace(/^v/, '')) {
-      console.log('mind is up to date.');
+      deps.log('mind is up to date.');
     } else {
-      console.log('A newer version is available. Run `mind update` to install it.');
+      deps.log('A newer version is available. Run `mind update` to install it.');
     }
     return;
   }
 
-  const installerPath = getInstallerPath();
-  if (!fs.existsSync(installerPath)) {
+  const installerPath = deps.getInstallerPath();
+  if (!deps.existsSync(installerPath)) {
     throw new Error(`Installer not found at ${installerPath}`);
   }
 
-  console.log('Running installer...');
+  const dbExistedBeforeInstall = deps.existsSync(deps.getDbPath());
 
-  const proc = Bun.spawn(['bash', installerPath], {
+  deps.log('Running installer...');
+
+  const proc = deps.spawn(['bash', installerPath], {
     env: {
-      ...process.env,
+      ...deps.env,
       MIND_INSTALL_REF: target,
       MIND_INSTALL_REPO: repo,
     },
@@ -111,5 +165,28 @@ export async function runUpdateCommand(args: string[]): Promise<void> {
     throw new Error(`Update failed (installer exit code: ${code})`);
   }
 
-  console.log('Update complete.');
+  deps.log('Update complete.');
+  if (dbExistedBeforeInstall) {
+    deps.log('Running post-update database migration check (mind status)...');
+    const statusProc = deps.spawn([deps.getLauncherPath(), 'status'], {
+      env: deps.env,
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    const statusCode = await statusProc.exited;
+    if (statusCode !== 0) {
+      throw new Error(
+        `Post-update database migration check failed (status exit code: ${statusCode})`
+      );
+    }
+    deps.log('Post-update database migration check complete.');
+  } else {
+    deps.log('Skipped post-update database migration check (no existing DB).');
+  }
+
+  if (refreshIntegrations) {
+    deps.log('Refreshing detected mind integrations...');
+    await deps.runSetupRefresh({ mode: 'detected' });
+  } else {
+    deps.log('Skipped integration refresh (--no-refresh-integrations).');
+  }
 }

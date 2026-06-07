@@ -23,7 +23,7 @@ const p = ArgParser.param.bind(ArgParser);
  */
 function linkMemoriesToCheckpoint(
   store: MindStore,
-  checkpointId: number,
+  checkpointId: string,
   linkedMemoriesFlag: string,
   space: string
 ): void {

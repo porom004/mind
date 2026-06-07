@@ -13,7 +13,7 @@ import type { ToolDefinition } from '../tool-types';
 
 const SPACE_TOOL_DESCRIPTIONS: Record<string, string> = {
   space_create:
-    'Create a new space with required tags. Use hierarchical names: projects/<repo>, user/preferences, sessions/<repo>.',
+    'Create a new space with required tags. Use hierarchical names like projects/<repo>, user/preferences, or global/config.',
   space_list: 'List all spaces, optionally filtered by tag.',
   space_get:
     'Get a space orientation summary with overview counts, changed-at trending memories by tier, and active checkpoints.',

@@ -37,14 +37,14 @@ describe('Phase 1.1 — Type definitions', () => {
   describe('HotMemorySummary type', () => {
     test('should have required fields: id, name, tier, tags, pinned, updated_at', () => {
       const summary: HotMemorySummary = {
-        id: 1,
+        id: 'uuid-test-1',
         name: 'test-memory',
         tier: 1,
         tags: ['project', 'important'],
         pinned: false,
         updated_at: '2026-03-21 10:00:00',
       };
-      expect(summary.id).toBe(1);
+      expect(summary.id).toBe('uuid-test-1');
       expect(summary.name).toBe('test-memory');
       expect(summary.tier).toBe(1);
       expect(summary.tags).toEqual(['project', 'important']);
@@ -54,7 +54,7 @@ describe('Phase 1.1 — Type definitions', () => {
 
     test('should accept tier 2 as valid HotMemorySummary tier', () => {
       const warm: HotMemorySummary = {
-        id: 2,
+        id: 'uuid-test-2',
         name: 'warm-memory',
         tier: 2,
         tags: [],
@@ -66,7 +66,7 @@ describe('Phase 1.1 — Type definitions', () => {
 
     test('should accept empty tags array', () => {
       const noTags: HotMemorySummary = {
-        id: 3,
+        id: 'uuid-test-3',
         name: 'no-tags',
         tier: 1,
         tags: [],

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { CONFIG } from '../config';
 import type { MindStore } from '../store/mind-store';
 import { createSqliteStore } from '../store/sqlite-store';
+import { withAutoExport } from '../sync/auto-export-store';
 
 import { matchApiRoute } from './router';
 
@@ -67,7 +68,9 @@ export async function runApiServer(port?: number, existingStore?: MindStore): Pr
     }
   }
 
-  const store = existingStore ?? createSqliteStore(CONFIG.dbPath);
+  const store = withAutoExport(existingStore ?? createSqliteStore(CONFIG.dbPath), {
+    source: 'api',
+  });
 
   Bun.serve({
     port: httpPort,

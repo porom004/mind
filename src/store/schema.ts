@@ -1,7 +1,8 @@
-// ── SQLite schema and migrations for Mind v7 ──
+// ── SQLite schema and migrations for Mind v8 ──
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
+// Core table creation only — no indexes that reference columns not present in earlier versions
 export const SCHEMA_SQL = `
 -- Version tracking
 CREATE TABLE IF NOT EXISTS meta (
@@ -9,9 +10,10 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
--- Spaces
+-- Spaces: UUID primary key + name as public unique key
 CREATE TABLE IF NOT EXISTS spaces (
-    name        TEXT PRIMARY KEY,
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL DEFAULT '',
     hidden      INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -24,10 +26,11 @@ CREATE TABLE IF NOT EXISTS space_tags (
     PRIMARY KEY (space_name, tag)
 );
 
--- Memories (tier 1=hot, 2=warm, 3=cold)
+-- Memories: UUID id + fts_id integer for FTS5 + space_id FK
 CREATE TABLE IF NOT EXISTS memories (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    space_name       TEXT NOT NULL REFERENCES spaces(name) ON DELETE CASCADE ON UPDATE CASCADE,
+    id               TEXT PRIMARY KEY,
+    fts_id           INTEGER NOT NULL UNIQUE,
+    space_id         TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
     name             TEXT NOT NULL,
     content          TEXT NOT NULL DEFAULT '',
     tier             INTEGER NOT NULL DEFAULT 2 CHECK (tier BETWEEN 1 AND 3),
@@ -38,19 +41,20 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
     changed_at       TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(space_name, name)
+    UNIQUE(space_id, name)
 );
 
+-- Memory tags: reference UUID memory id
 CREATE TABLE IF NOT EXISTS memory_tags (
-    memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
     tag       TEXT NOT NULL,
     PRIMARY KEY (memory_id, tag)
 );
 
--- Links between memories
+-- Links: reference UUID memory ids
 CREATE TABLE IF NOT EXISTS links (
-    source_id  INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-    target_id  INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    source_id  TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    target_id  TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
     label      TEXT NOT NULL DEFAULT 'related',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (source_id, target_id),
@@ -58,21 +62,19 @@ CREATE TABLE IF NOT EXISTS links (
 );
 
 -- Full-text search (standalone, synced manually — bun:sqlite has a bug with content-sync triggers)
+-- rowid is linked to memories.fts_id (not the UUID primary key)
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     name, content,
     tokenize='porter unicode61'
 );
 
--- Indexes for common queries
-CREATE INDEX IF NOT EXISTS idx_memories_space ON memories(space_name);
-CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier);
-CREATE INDEX IF NOT EXISTS idx_memories_space_tier ON memories(space_name, tier);
-CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag);
-CREATE INDEX IF NOT EXISTS idx_space_tags_tag ON space_tags(tag);
-CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_id);
-CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_id);
+-- fts_id sequence: transactional integer assignment for FTS5 rowid
+CREATE TABLE IF NOT EXISTS fts_id_sequence (
+    entity     TEXT PRIMARY KEY,
+    next_value INTEGER NOT NULL
+);
 
--- Logs table for operation auditing
+-- Logs table for operation auditing (unchanged from v7)
 CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
@@ -85,19 +87,28 @@ CREATE TABLE IF NOT EXISTS logs (
     duration_ms INTEGER,
     timestamp TEXT NOT NULL DEFAULT (datetime('now'))
 );
+`;
 
+// Indexes that reference v8+ columns — applied AFTER schema creation or migration
+const SCHEMA_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_spaces_name ON spaces(name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_spaces_id ON spaces(id);
+CREATE INDEX IF NOT EXISTS idx_memories_space_id ON memories(space_id);
+CREATE INDEX IF NOT EXISTS idx_memories_space_id_name ON memories(space_id, name);
+CREATE INDEX IF NOT EXISTS idx_memories_fts_id ON memories(fts_id);
+CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(space_id, tier);
+CREATE INDEX IF NOT EXISTS idx_memories_changed_at ON memories(changed_at);
+CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag);
+CREATE INDEX IF NOT EXISTS idx_space_tags_tag ON space_tags(tag);
+CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_id);
+CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_id);
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp_source ON logs(timestamp, source);
 CREATE INDEX IF NOT EXISTS idx_logs_operation ON logs(operation);
 `;
 
 // ── Migration: v1 → v2 ──
-// Changes: memories.tier CHECK constraint BETWEEN 1 AND 3 → BETWEEN 1 AND 4
-// SQLite doesn't support ALTER COLUMN, so we use the 12-step table recreation.
 const MIGRATE_V1_TO_V2 = `
--- Step 1: disable FK enforcement during migration
 PRAGMA foreign_keys = OFF;
-
--- Step 2: recreate memories with the new CHECK constraint
 CREATE TABLE memories_v2 (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     space_name       TEXT NOT NULL REFERENCES spaces(name) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -111,37 +122,23 @@ CREATE TABLE memories_v2 (
     updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(space_name, name)
 );
-
--- Step 3: copy all existing data
 INSERT INTO memories_v2 SELECT * FROM memories;
-
--- Step 4: drop the old table (cascades its indexes)
 DROP TABLE memories;
-
--- Step 5: rename
 ALTER TABLE memories_v2 RENAME TO memories;
-
--- Step 6: recreate indexes
 CREATE INDEX IF NOT EXISTS idx_memories_space ON memories(space_name);
 CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier);
 CREATE INDEX IF NOT EXISTS idx_memories_space_tier ON memories(space_name, tier);
-
--- Step 7: re-enable FK enforcement
 PRAGMA foreign_keys = ON;
-
--- Step 8: bump schema version
 UPDATE meta SET value = '2' WHERE key = 'schema_version';
 `;
 
 // ── Migration: v2 → v3 ──
-// Changes: add memories.embedding BLOB column for RAG/embeddings
 const MIGRATE_V2_TO_V3 = `
 ALTER TABLE memories ADD COLUMN embedding BLOB;
 UPDATE meta SET value = '3' WHERE key = 'schema_version';
 `;
 
 // ── Migration: v3 → v4 ──
-// Changes: add memories.changed_at column for semantic memory changes
 const MIGRATE_V3_TO_V4 = `
 ALTER TABLE memories ADD COLUMN changed_at TEXT;
 UPDATE memories SET changed_at = updated_at WHERE changed_at IS NULL;
@@ -149,14 +146,12 @@ UPDATE meta SET value = '4' WHERE key = 'schema_version';
 `;
 
 // ── Migration: v4 → v5 ──
-// Changes: add spaces.hidden column for hidden spaces (used by checkpoint system)
 const MIGRATE_V4_TO_V5 = `
 ALTER TABLE spaces ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
 UPDATE meta SET value = '5' WHERE key = 'schema_version';
 `;
 
 // ── Migration: v5 → v6 ──
-// Changes: add logs table for operation auditing
 const MIGRATE_V5_TO_V6 = `
 CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,12 +171,8 @@ UPDATE meta SET value = '6' WHERE key = 'schema_version';
 `;
 
 // ── Migration: v6 → v7 ──
-// Changes: remove T4 (frozen) tier entirely; T3 becomes unlimited; migrate all T4 → T3
 const MIGRATE_V6_TO_V7 = `
--- Step 1: disable FK enforcement during migration
 PRAGMA foreign_keys = OFF;
-
--- Step 2: recreate memories with the new CHECK constraint (T3 only, no T4)
 CREATE TABLE memories_v7 (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     space_name       TEXT NOT NULL REFERENCES spaces(name) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -197,31 +188,177 @@ CREATE TABLE memories_v7 (
     changed_at       TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(space_name, name)
 );
-
--- Step 3: copy all existing data (T4 → T3 via CASE expression to satisfy CHECK constraint)
 INSERT INTO memories_v7 SELECT
     id, space_name, name, content,
     CASE WHEN tier = 4 THEN 3 ELSE tier END,
     pinned, access_count, last_accessed_at, embedding,
     created_at, updated_at, changed_at
 FROM memories;
-
--- Step 4: drop the old table (cascades its indexes)
 DROP TABLE memories;
-
--- Step 5: rename
 ALTER TABLE memories_v7 RENAME TO memories;
-
--- Step 6: recreate indexes
 CREATE INDEX IF NOT EXISTS idx_memories_space ON memories(space_name);
 CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier);
 CREATE INDEX IF NOT EXISTS idx_memories_space_tier ON memories(space_name, tier);
-
--- Step 7: re-enable FK enforcement
 PRAGMA foreign_keys = ON;
-
--- Step 8: bump schema version
 UPDATE meta SET value = '7' WHERE key = 'schema_version';
+`;
+
+// ── Migration: v7 → v8 ──
+// Changes: UUID primary keys for spaces and memories, fts_id INTEGER for FTS5,
+//          space_id FK instead of space_name, fts_id_sequence table
+const MIGRATE_V7_TO_V8 = `
+-- Step 1: disable FK enforcement during migration
+PRAGMA foreign_keys = OFF;
+
+-- ── PHASE 1: Save dependent data into temp tables using name-based lookups ──
+
+CREATE TEMP TABLE _migrate_tags AS
+SELECT m.space_name, m.name as memory_name, mt.tag
+FROM memory_tags mt
+JOIN memories m ON m.id = mt.memory_id;
+
+CREATE TEMP TABLE _migrate_links AS
+SELECT m_src.space_name as src_space, m_src.name as src_name,
+       m_tgt.space_name as tgt_space, m_tgt.name as tgt_name,
+       l.label
+FROM links l
+JOIN memories m_src ON m_src.id = l.source_id
+JOIN memories m_tgt ON m_tgt.id = l.target_id;
+
+-- ── PHASE 2: Add UUIDs to spaces, create unique index for FK references ──
+
+ALTER TABLE spaces ADD COLUMN id TEXT;
+UPDATE spaces SET id = lower(
+      hex(randomblob(4)) || '-' ||
+      substr(hex(randomblob(2)), 1, 4) || '-4' ||
+      substr(hex(randomblob(2)), 2, 3) || '-' ||
+      substr('89ab', (abs(random()) % 4) + 1, 1) ||
+      substr(hex(randomblob(2)), 2, 3) || '-' ||
+      hex(randomblob(6))
+    );
+-- Unique index on spaces.id required for FK references from memories_v8
+CREATE UNIQUE INDEX IF NOT EXISTS idx_spaces_id ON spaces(id);
+
+-- ── PHASE 3: Create new memories_v8, copy data with UUIDs ──
+
+CREATE TABLE memories_v8 (
+    id               TEXT PRIMARY KEY,
+    fts_id           INTEGER NOT NULL UNIQUE,
+    space_id         TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    content          TEXT NOT NULL DEFAULT '',
+    tier             INTEGER NOT NULL DEFAULT 2 CHECK (tier BETWEEN 1 AND 3),
+    pinned           INTEGER NOT NULL DEFAULT 0,
+    access_count     INTEGER NOT NULL DEFAULT 0,
+    last_accessed_at TEXT,
+    embedding        BLOB,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    changed_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(space_id, name)
+);
+
+INSERT INTO memories_v8 (id, fts_id, space_id, name, content, tier, pinned, access_count, last_accessed_at, embedding, created_at, updated_at, changed_at)
+SELECT
+    lower(
+      hex(randomblob(4)) || '-' ||
+      substr(hex(randomblob(2)), 1, 4) || '-4' ||
+      substr(hex(randomblob(2)), 2, 3) || '-' ||
+      substr('89ab', (abs(random()) % 4) + 1, 1) ||
+      substr(hex(randomblob(2)), 2, 3) || '-' ||
+      hex(randomblob(6))
+    ) as id,
+    m.id as fts_id,
+    s.id as space_id,
+    m.name,
+    m.content,
+    m.tier,
+    m.pinned,
+    m.access_count,
+    m.last_accessed_at,
+    m.embedding,
+    m.created_at,
+    m.updated_at,
+    m.changed_at
+FROM memories m
+JOIN spaces s ON s.name = m.space_name;
+
+-- ── PHASE 4: Drop old memories, rename, create indexes ──
+
+DROP TABLE memories;
+ALTER TABLE memories_v8 RENAME TO memories;
+
+CREATE INDEX IF NOT EXISTS idx_memories_space_id ON memories(space_id);
+CREATE INDEX IF NOT EXISTS idx_memories_space_id_name ON memories(space_id, name);
+CREATE INDEX IF NOT EXISTS idx_memories_fts_id ON memories(fts_id);
+CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(space_id, tier);
+CREATE INDEX IF NOT EXISTS idx_memories_changed_at ON memories(changed_at);
+
+-- ── PHASE 5: Migrate tags using UUID lookups ──
+
+DROP TABLE memory_tags;
+CREATE TABLE memory_tags (
+    memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    tag       TEXT NOT NULL,
+    PRIMARY KEY (memory_id, tag)
+);
+
+INSERT INTO memory_tags (memory_id, tag)
+SELECT m.id, _t.tag
+FROM _migrate_tags _t
+JOIN spaces s ON s.name = _t.space_name
+JOIN memories m ON m.space_id = s.id AND m.name = _t.memory_name;
+
+DROP TABLE _migrate_tags;
+
+-- ── PHASE 6: Migrate links using UUID lookups ──
+
+DROP TABLE links;
+CREATE TABLE links (
+    source_id  TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    target_id  TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    label      TEXT NOT NULL DEFAULT 'related',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (source_id, target_id),
+    CHECK (source_id != target_id)
+);
+
+INSERT INTO links (source_id, target_id, label)
+SELECT m_src.id, m_tgt.id, _l.label
+FROM _migrate_links _l
+JOIN spaces s_src ON s_src.name = _l.src_space
+JOIN memories m_src ON m_src.space_id = s_src.id AND m_src.name = _l.src_name
+JOIN spaces s_tgt ON s_tgt.name = _l.tgt_space
+JOIN memories m_tgt ON m_tgt.space_id = s_tgt.id AND m_tgt.name = _l.tgt_name;
+
+DROP TABLE _migrate_links;
+
+-- ── PHASE 7: Rebuild FTS with fts_id as rowid ──
+
+DROP TABLE memories_fts;
+CREATE VIRTUAL TABLE memories_fts USING fts5(name, content, tokenize='porter unicode61');
+
+INSERT INTO memories_fts(rowid, name, content)
+SELECT fts_id, name, content FROM memories;
+
+-- ── PHASE 8: Remove now-obsolete v7 indexes ──
+
+DROP INDEX IF EXISTS idx_memories_space;
+DROP INDEX IF EXISTS idx_memories_space_tier;
+
+-- ── PHASE 9: Create fts_id_sequence ──
+
+CREATE TABLE IF NOT EXISTS fts_id_sequence (
+    entity     TEXT PRIMARY KEY,
+    next_value INTEGER NOT NULL
+);
+INSERT OR REPLACE INTO fts_id_sequence (entity, next_value)
+VALUES ('memories', (SELECT COALESCE(MAX(fts_id), 0) + 1 FROM memories));
+
+-- ── PHASE 10: Re-enable FKs and bump schema version ──
+
+PRAGMA foreign_keys = ON;
+UPDATE meta SET value = '8' WHERE key = 'schema_version';
 `;
 
 export function initializeDatabase(db: import('bun:sqlite').Database): void {
@@ -242,40 +379,44 @@ export function initializeDatabase(db: import('bun:sqlite').Database): void {
       'schema_version',
       String(SCHEMA_VERSION),
     ]);
+    // Initialize fts_id_sequence for fresh databases
+    db.run("INSERT OR IGNORE INTO fts_id_sequence (entity, next_value) VALUES ('memories', 1)");
+    // Apply indexes after fresh table creation
+    db.exec(SCHEMA_INDEXES);
     return;
   }
 
   const currentVersion = parseInt(meta.value, 10);
 
   if (currentVersion < 2) {
-    // Migrate v1 → v2
     db.exec(MIGRATE_V1_TO_V2);
   }
 
   if (currentVersion < 3) {
-    // Migrate v2 → v3
     db.exec(MIGRATE_V2_TO_V3);
   }
 
   if (currentVersion < 4) {
-    // Migrate v3 → v4
     db.exec(MIGRATE_V3_TO_V4);
   }
 
   if (currentVersion < 5) {
-    // Migrate v4 → v5
     db.exec(MIGRATE_V4_TO_V5);
   }
 
   if (currentVersion < 6) {
-    // Migrate v5 → v6
     db.exec(MIGRATE_V5_TO_V6);
   }
 
   if (currentVersion < 7) {
-    // Migrate v6 → v7
     db.exec(MIGRATE_V6_TO_V7);
   }
 
-  // Future migrations: add else-if blocks here for v7→v8, etc.
+  if (currentVersion < 8) {
+    db.exec(MIGRATE_V7_TO_V8);
+  }
+
+  // Always apply indexes after migrations — for v8+, the migration creates
+  // the needed indexes, but SCHEMA_INDEXES uses IF NOT EXISTS so it's a no-op.
+  db.exec(SCHEMA_INDEXES);
 }

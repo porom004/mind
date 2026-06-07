@@ -627,12 +627,14 @@ describe('Command Executor — Checkpoint', () => {
     const updated = store.getMemory('myproject', cpName);
     expect(updated).toBeNull();
 
-    // Check session memory was created in sessions/myproject
-    const sessionsMemories = store.listMemories('sessions/myproject', {});
+    // Check session memory was created in myproject
+    expect(store.getSpace('sessions/myproject')).toBeNull();
+    const sessionsMemories = store.queryMemories({ space: 'myproject', tag: 'type:session' });
     expect(sessionsMemories.length).toBeGreaterThan(0);
     const sessionMem = sessionsMemories.find(m => m.tags.includes('type:session'));
     expect(sessionMem).toBeDefined();
     expect(sessionMem!.tags).toContain('cat:summary');
+    expect(sessionMem!.tier).toBe(3);
 
     const logs = logger.getLogs();
     expect(logs.some(l => l.message.includes('transformed into session memory'))).toBe(true);
@@ -686,6 +688,28 @@ describe('Command Executor — Checkpoint', () => {
     const content = JSON.parse(mem!.content);
 
     expect(content.notes).toBe('Important context');
+  });
+
+  test('should dry-run migrate legacy session summaries into the project space', async () => {
+    store = createTestStore();
+    const logger = mockedLogger();
+    store.createSpace('projects/mind', 'Mind project', ['type:project']);
+    store.createSpace('sessions/mind', 'Legacy sessions', ['type:project']);
+    await store.addMemory('sessions/mind', 'summary-session-1', 'Legacy summary', {
+      tags: ['type:session', 'cat:discovery'],
+    });
+
+    await executeCommand(['migrate', 'sessions', 'projects/mind', '--dry-run'], store, logger);
+
+    const report = logger
+      .getLogs()
+      .map(entry => entry.message)
+      .find(message => message.includes('"dryRun": true'));
+
+    expect(report).toBeDefined();
+    expect(report).toContain('summary-session-1');
+    expect(report).toContain('projects/mind');
+    expect(store.getMemory('sessions/mind', 'summary-session-1')).not.toBeNull();
   });
 });
 

@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -11,6 +9,7 @@ import {
 
 import { createLogEntry } from '../helpers/logger';
 import type { MindStore } from '../store/mind-store';
+import { withAutoExport } from '../sync/auto-export-store';
 
 import { zodToJsonSchema } from './helpers/json-schema';
 import type { ToolDefinition } from './tool-types';
@@ -121,11 +120,27 @@ function createMcpServer(store: MindStore): Server {
 
 export { zodToJsonSchema } from './helpers/json-schema';
 
-export async function startMcpServer(store: MindStore): Promise<void> {
-  const server = createMcpServer(store);
+// ── Autosync watchers ─────────────────────────────────────────────────────────
+
+export async function startAutosyncWatchers(store: MindStore, projectRoot?: string): Promise<void> {
+  const { startAutosyncWatchers: startWatchers } = await import('../sync/auto-sync-service');
+  await startWatchers(store, projectRoot ?? process.cwd());
+}
+
+export async function startMcpServer(store: MindStore, projectRoot?: string): Promise<void> {
+  const wrappedStore = withAutoExport(store, { source: 'mcp', projectRoot });
+  const server = createMcpServer(wrappedStore);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Mind MCP server running on stdio');
+
+  // Resolve project root: explicit parameter > MIND_SYNC_ROOT env > cwd
+  const resolvedRoot = projectRoot ?? process.env.MIND_SYNC_ROOT ?? process.cwd();
+
+  // Start autosync watchers for all enabled spaces
+  setImmediate(() => startAutosyncWatchers(wrappedStore, resolvedRoot));
+
+  await new Promise(() => {}); // keep alive
 }
 
 type SessionEntry = {
@@ -147,7 +162,12 @@ function jsonRpcSessionError(status: number, message: string): Response {
   );
 }
 
-export async function startMcpHttpServer(store: MindStore, port: number = 7438): Promise<void> {
+export async function startMcpHttpServer(
+  store: MindStore,
+  port: number = 7438,
+  projectRoot?: string
+): Promise<void> {
+  const wrappedStore = withAutoExport(store, { source: 'mcp', projectRoot });
   const sessions = new Map<string, SessionEntry>();
   const mcpPort = Number(port || process.env.MCP_PORT || 7438);
   const idleTimeout = Number(process.env.MIND_MCP_IDLE_TIMEOUT ?? 120);
@@ -187,11 +207,11 @@ export async function startMcpHttpServer(store: MindStore, port: number = 7438):
         }
 
         if (!sessionId && isInitializeRequest(body)) {
-          const server = createMcpServer(store);
+          const server = createMcpServer(wrappedStore);
           let transport: WebStandardStreamableHTTPServerTransport;
 
           transport = new WebStandardStreamableHTTPServerTransport({
-            sessionIdGenerator: () => randomUUID(),
+            sessionIdGenerator: () => crypto.randomUUID(),
             onsessioninitialized: id => {
               sessions.set(id, { server, transport });
             },
@@ -226,4 +246,10 @@ export async function startMcpHttpServer(store: MindStore, port: number = 7438):
   });
 
   console.error(`Mind MCP HTTP server running on http://localhost:${mcpPort}/mcp`);
+
+  // Resolve project root: explicit parameter > MIND_SYNC_ROOT env > cwd
+  const resolvedRoot = projectRoot ?? process.env.MIND_SYNC_ROOT ?? process.cwd();
+
+  // Start autosync watchers for all enabled spaces
+  setImmediate(() => startAutosyncWatchers(wrappedStore, resolvedRoot));
 }

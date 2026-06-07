@@ -7,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { renderMemoryProtocol } from '../src/cli/memory-protocol';
 import { buildOpenCodeAutomationPlugin, runSetup } from '../src/cli/setup';
 
+function stripJsoncComments(text: string): string {
+  // Strip /* block */ and // line comments. Naive but adequate for
+  // opencode.jsonc fixtures in these tests.
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
 let previousHome = '';
 let tempHome = '';
 
@@ -26,7 +32,7 @@ afterEach(() => {
 describe('OpenCode setup integration', () => {
   test('is non-destructive and injects memory protocol instructions', async () => {
     const opencodeDir = join(tempHome, '.config', 'opencode');
-    const configPath = join(opencodeDir, 'opencode.json');
+    const configPath = join(opencodeDir, 'opencode.jsonc');
 
     const existing = {
       theme: 'dark',
@@ -41,11 +47,13 @@ describe('OpenCode setup integration', () => {
     };
 
     mkdirSync(opencodeDir, { recursive: true });
-    writeFileSync(configPath, JSON.stringify(existing, null, 2));
+    writeFileSync(configPath, '// opencode config\n' + JSON.stringify(existing, null, 2) + '\n');
 
     await runSetup('opencode');
 
-    const parsed = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, any>;
+    const text = readFileSync(configPath, 'utf-8');
+    expect(text).toContain('// opencode config'); // JSONC comment preserved
+    const parsed = JSON.parse(stripJsoncComments(text)) as Record<string, any>;
 
     expect(parsed.theme).toBe('dark');
     expect(parsed.customKey.keep).toBe(true);
@@ -84,8 +92,9 @@ describe('OpenCode setup integration', () => {
     await runSetup('opencode');
     await runSetup('opencode');
 
-    const configPath = join(tempHome, '.config', 'opencode', 'opencode.json');
-    const parsed = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, any>;
+    const configPath = join(tempHome, '.config', 'opencode', 'opencode.jsonc');
+    const text = readFileSync(configPath, 'utf-8');
+    const parsed = JSON.parse(stripJsoncComments(text)) as Record<string, any>;
 
     const mindEntries = Object.keys(parsed.mcp).filter(k => k === 'mind');
     expect(mindEntries.length).toBe(1);
@@ -107,7 +116,7 @@ describe('OpenCode setup integration', () => {
   test('normalizes dirty instruction list across multiple reruns', async () => {
     const opencodeDir = join(tempHome, '.config', 'opencode');
     const instructionsDir = join(opencodeDir, 'instructions');
-    const configPath = join(opencodeDir, 'opencode.json');
+    const configPath = join(opencodeDir, 'opencode.jsonc');
     const expectedInstructionPath = join(instructionsDir, 'mind-memory-protocol.md');
     const legacyPath = join(instructionsDir, 'mind-memory-protocol-opencode.md');
 
@@ -134,7 +143,8 @@ describe('OpenCode setup integration', () => {
     await runSetup('opencode');
     await runSetup('opencode');
 
-    const parsed = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, any>;
+    const text = readFileSync(configPath, 'utf-8');
+    const parsed = JSON.parse(stripJsoncComments(text)) as Record<string, any>;
     const entries = parsed.instructions as string[];
 
     expect(entries[0]).toBe(expectedInstructionPath);
@@ -162,6 +172,16 @@ describe('OpenCode setup integration', () => {
     expect(pluginText).toContain('experimental.session.compacting');
     expect(pluginText).toContain('checkpoint set');
     expect(pluginText).toContain('checkpoint recover');
+    expect(pluginText).not.toContain('--history');
+    expect(pluginText).toContain('--name <checkpoint-name>');
+    expect(pluginText).not.toContain('sessions/');
+    expect(pluginText).toContain('type:session,cat:summary');
+    expect(pluginText).toContain('--tier');
+    expect(pluginText).toContain("'3'");
+    expect(pluginText).toContain('mind.session-summary/v1');
+    expect(pluginText).toContain('sessionSummary');
+    expect(pluginText).toContain('writer');
+    expect(pluginText).toContain('provenance');
   });
 
   test('plugin exports experimental.chat.system.transform handler', async () => {
@@ -316,5 +336,177 @@ export const handlers = {
     } finally {
       await Bun.file(tmpPath).delete();
     }
+  });
+
+  test('prefers opencode.jsonc over opencode.json when both exist', async () => {
+    const opencodeDir = join(tempHome, '.config', 'opencode');
+    const jsonPath = join(opencodeDir, 'opencode.json');
+    const jsoncPath = join(opencodeDir, 'opencode.jsonc');
+
+    mkdirSync(opencodeDir, { recursive: true });
+    writeFileSync(
+      jsonPath,
+      JSON.stringify({ theme: 'dark', mcp: { github: { command: 'gh-mcp' } } }, null, 2)
+    );
+    writeFileSync(
+      jsoncPath,
+      [
+        '// jsonc config with comments',
+        '{',
+        '  "theme": "light", // jsonc preferred',
+        '  "mcp": { "github": { "command": "gh-mcp" } }',
+        '}',
+        '',
+      ].join('\n')
+    );
+
+    await runSetup('opencode');
+
+    // opencode.jsonc was the file chosen and updated. Comments may be
+    // regenerated because the key set changed (mind + instructions added);
+    // the contract is that the file is parseable and contains the merged
+    // mind config.
+    const jsoncText = readFileSync(jsoncPath, 'utf-8');
+    expect(jsoncText).toContain('"mind"');
+    expect(jsoncText).toContain('"github"');
+    const jsoncParsed = JSON.parse(stripJsoncComments(jsoncText)) as Record<string, any>;
+    expect(jsoncParsed.theme).toBe('light');
+    expect(jsoncParsed.mcp.github.command).toBe('gh-mcp');
+    expect(jsoncParsed.mcp.mind.type).toBe('local');
+
+    // opencode.json must be UNCHANGED.
+    const jsonContent = JSON.parse(readFileSync(jsonPath, 'utf-8')) as Record<string, any>;
+    expect(jsonContent.theme).toBe('dark');
+    expect(jsonContent.mcp.github.command).toBe('gh-mcp');
+    expect(jsonContent.mcp.mind).toBeUndefined();
+  });
+
+  test('does not create opencode.json when opencode.jsonc exists', async () => {
+    const opencodeDir = join(tempHome, '.config', 'opencode');
+    const jsoncPath = join(opencodeDir, 'opencode.jsonc');
+    const jsonPath = join(opencodeDir, 'opencode.json');
+
+    mkdirSync(opencodeDir, { recursive: true });
+    writeFileSync(jsoncPath, '// initial\n{ "theme": "dark" }\n');
+
+    await runSetup('opencode');
+
+    expect(existsSync(jsoncPath)).toBe(true);
+    expect(existsSync(jsonPath)).toBe(false);
+  });
+
+  test('uses opencode.jsonc when only opencode.jsonc exists', async () => {
+    const opencodeDir = join(tempHome, '.config', 'opencode');
+    const jsoncPath = join(opencodeDir, 'opencode.jsonc');
+
+    mkdirSync(opencodeDir, { recursive: true });
+    writeFileSync(
+      jsoncPath,
+      '/* header */\n{ "theme": "dark", "mcp": { "github": { "command": "g" } } }\n'
+    );
+
+    await runSetup('opencode');
+
+    // The opencode.jsonc file was the file that got updated. opencode.json
+    // must NOT have been created.
+    expect(existsSync(join(opencodeDir, 'opencode.json'))).toBe(false);
+    expect(existsSync(jsoncPath)).toBe(true);
+    const after = readFileSync(jsoncPath, 'utf-8');
+    const parsed = JSON.parse(stripJsoncComments(after)) as Record<string, any>;
+    expect(parsed.theme).toBe('dark');
+    expect(parsed.mcp.github.command).toBe('g');
+    expect(parsed.mcp.mind).toBeDefined();
+  });
+
+  test('rewrites opencode.jsonc as parseable JSONC with merged config', async () => {
+    // The setup adds the `instructions` top-level key. jsonc-parser cannot
+    // preserve the document structure across key set changes, so the file
+    // is cleanly rewritten. The contract here is that the resulting file
+    // is still parseable as JSONC and contains the merged mind config.
+    const opencodeDir = join(tempHome, '.config', 'opencode');
+    const jsoncPath = join(opencodeDir, 'opencode.jsonc');
+
+    mkdirSync(opencodeDir, { recursive: true });
+    const original = [
+      '// top-level config note',
+      '{',
+      '  "theme": "dark",',
+      '  "mcp": { "github": { "command": "g" } }',
+      '}',
+      '',
+    ].join('\n');
+    writeFileSync(jsoncPath, original);
+
+    await runSetup('opencode');
+
+    const after = readFileSync(jsoncPath, 'utf-8');
+    // mind config is merged in.
+    expect(after).toContain('"mind"');
+    expect(after).toContain('"github"');
+    // The file is still valid JSONC (no syntactic damage from a partial
+    // write).
+    expect(() => JSON.parse(stripJsoncComments(after))).not.toThrow();
+  });
+
+  test('aborts setup and leaves file untouched when opencode.json is malformed', async () => {
+    const opencodeDir = join(tempHome, '.config', 'opencode');
+    const jsonPath = join(opencodeDir, 'opencode.json');
+
+    mkdirSync(opencodeDir, { recursive: true });
+    const original = '{ "theme": "dark", "mcp": '; // truncated
+    writeFileSync(jsonPath, original);
+
+    let caught: Error | null = null;
+    try {
+      await runSetup('opencode');
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(String(caught?.message ?? '')).toMatch(/malformed|setup/i);
+
+    // File must remain byte-for-byte identical (no truncation, no rewrite).
+    expect(readFileSync(jsonPath, 'utf-8')).toBe(original);
+  });
+
+  test('aborts setup and leaves file untouched when opencode.jsonc is malformed', async () => {
+    const opencodeDir = join(tempHome, '.config', 'opencode');
+    const jsoncPath = join(opencodeDir, 'opencode.jsonc');
+
+    mkdirSync(opencodeDir, { recursive: true });
+    const original = '{ "theme": "dark", "mcp":'; // truncated
+    writeFileSync(jsoncPath, original);
+
+    let caught: Error | null = null;
+    try {
+      await runSetup('opencode');
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(String(caught?.message ?? '')).toMatch(/malformed|setup/i);
+
+    expect(readFileSync(jsoncPath, 'utf-8')).toBe(original);
+  });
+
+  test('backs up opencode.json before mutating it', async () => {
+    const opencodeDir = join(tempHome, '.config', 'opencode');
+    const jsonPath = join(opencodeDir, 'opencode.json');
+
+    mkdirSync(opencodeDir, { recursive: true });
+    const original = { theme: 'dark', mcp: { github: { command: 'gh' } } };
+    writeFileSync(jsonPath, JSON.stringify(original, null, 2));
+
+    await runSetup('opencode');
+
+    // Look for a sibling backup that contains the pre-setup content.
+    const { readdirSync } = require('node:fs') as typeof import('node:fs');
+    const entries = readdirSync(opencodeDir).filter(name => name.startsWith('opencode.json.bak.'));
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    const backup = JSON.parse(
+      readFileSync(join(opencodeDir, entries[0] as string), 'utf-8')
+    ) as Record<string, any>;
+    expect(backup.theme).toBe('dark');
+    expect(backup.mcp.github.command).toBe('gh');
   });
 });

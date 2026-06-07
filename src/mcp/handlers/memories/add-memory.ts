@@ -26,7 +26,7 @@ export function addMemoryHandler(store: MindStore) {
 
     const linksCreated: Array<{ source: string; target: string; label: string }> = [];
     const linksFailed: Array<{ ref: string; reason: string }> = [];
-    let linksToIds: number[] | undefined;
+    let linksToIds: string[] | undefined;
 
     if (parsed.links_to && parsed.links_to.length > 0) {
       linksToIds = [];

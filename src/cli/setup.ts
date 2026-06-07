@@ -5,6 +5,15 @@ import * as path from 'path';
 
 import { DEFAULT_PORT } from '../config';
 import { getAgentConfig } from '../setup/agent-config';
+import {
+  MalformedConfigError,
+  readJsoncOrThrow,
+  readJsonOrThrow,
+  readTomlOrThrow,
+  safeWriteJson,
+  safeWriteJsonc,
+  safeWriteToml,
+} from '../setup/safe-config';
 import { ensureMindManagementSkill } from '../setup/skill-installation';
 export { buildOpenCodeAutomationPlugin } from '../setup/opencode-automation-plugin';
 export { getAgentCapabilities, getAgentCapabilityMatrix } from './capabilities';
@@ -14,6 +23,7 @@ import {
   type SupportedAgent,
   formatCapabilityBadge,
   getAgentCapabilityMatrix,
+  getSupportedAgents,
 } from './capabilities';
 import { renderMemoryProtocol } from './memory-protocol';
 
@@ -140,23 +150,112 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+/**
+ * Read a strict JSON config file. Throws `MalformedConfigError` if the file
+ * exists but cannot be parsed. Returns `{}` for a missing file.
+ */
 function readJson(filePath: string): Record<string, unknown> {
-  if (!fs.existsSync(filePath)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+  return readJsonOrThrow(filePath);
 }
 
+/**
+ * Write a JSON config file atomically with a timestamped backup of the
+ * pre-write file. Aborts the calling setup run if the existing file is
+ * malformed.
+ */
 function writeJson(filePath: string, value: Record<string, unknown>): void {
-  ensureDir(path.dirname(filePath));
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+  safeWriteJson(filePath, value);
+}
+
+/**
+ * Read a JSONC config file (used for opencode.jsonc). Throws on malformed
+ * input. Returns `{}` for a missing file.
+ */
+function readJsonc(filePath: string): Record<string, unknown> {
+  return readJsoncOrThrow(filePath);
+}
+
+/**
+ * Write a JSONC config file with comment-preserving edit. Backups the
+ * pre-write file and refuses to overwrite a malformed one.
+ */
+function writeJsonc(
+  filePath: string,
+  updater: (current: Record<string, unknown>) => Record<string, unknown>
+): void {
+  safeWriteJsonc(filePath, updater);
 }
 
 function readText(filePath: string): string {
   if (!fs.existsSync(filePath)) return '';
   return fs.readFileSync(filePath, 'utf-8');
+}
+
+function jsonFileHasMindMcp(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+
+  const config = readJson(filePath);
+  const mcp = config.mcp as Record<string, unknown> | undefined;
+  const mcpServers = config.mcpServers as Record<string, unknown> | undefined;
+
+  return Boolean(mcp?.mind || mcpServers?.mind);
+}
+
+function tomlFileHasMindMcp(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+  // Parse-validates the file. Malformed input throws MalformedConfigError
+  // and the caller (isAgentIntegrationDetected / detection path) lets it
+  // propagate so the user sees a real parse-failure diagnostic instead of
+  // a silent false.
+  const config = readTomlOrThrow(filePath);
+  const mcpServers = config.mcp_servers as Record<string, unknown> | undefined;
+  return Boolean(mcpServers?.mind);
+}
+
+/**
+ * Format-aware detection dispatch. TOML agents (currently codex) must NOT
+ * pass through the JSON probe — TOML is not JSON and would always throw,
+ * producing misleading diagnostics. JSON/JSONC agents keep the existing
+ * JSON probe.
+ */
+function hasMindMcpInAgentConfig(cfg: { configPath: string; format: 'json' | 'toml' }): boolean {
+  if (cfg.format === 'toml') {
+    return tomlFileHasMindMcp(cfg.configPath);
+  }
+  return jsonFileHasMindMcp(cfg.configPath);
+}
+
+/**
+ * Find the byte range `[start, end)` of a TOML `[dotted.path]` table
+ * stanza inside `text`. Returns `null` if no matching table header exists.
+ *
+ * The end position is the start of the *next* table header line (including
+ * array-of-tables `[[...]]` headers) or end-of-file. The intent is to
+ * give the caller a single contiguous slice they can replace surgically
+ * while leaving preceding/following tables and their comments intact.
+ */
+function findTomlTableStanzaBounds(
+  text: string,
+  tablePath: string
+): { start: number; end: number } | null {
+  const escaped = tablePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const startPattern = new RegExp(`^\\[${escaped}\\]\\s*$`, 'm');
+  const startMatch = startPattern.exec(text);
+  if (!startMatch) {
+    return null;
+  }
+  const start = startMatch.index;
+  // Skip past the matched header line so endPattern cannot match the same
+  // table header again.
+  const endPattern = /^[\t ]*\[+[^\]]+\]+\s*$/gm;
+  endPattern.lastIndex = start + startMatch[0].length;
+  const endMatch = endPattern.exec(text);
+  const end = endMatch ? endMatch.index : text.length;
+  return { start, end };
 }
 
 function writeText(filePath: string, content: string): void {
@@ -328,6 +427,18 @@ function shouldEnableClaudeHooks(): boolean {
   return value === '1' || value === 'true' || value === 'yes';
 }
 
+function hasClaudeHooksSignal(): boolean {
+  const home = getHomeDir();
+  const hookScriptPath = path.join(home, '.claude', 'hooks', CLAUDE_HOOK_SCRIPT_NAME);
+  if (fs.existsSync(hookScriptPath)) {
+    return true;
+  }
+
+  const settingsText = readText(path.join(home, '.claude', 'settings.json'));
+  const fallbackText = readText(path.join(home, '.claude.json'));
+  return [settingsText, fallbackText].some(text => text.includes(CLAUDE_HOOK_SCRIPT_NAME));
+}
+
 function ensureExecutableScript(filePath: string, content: string): string {
   writeText(filePath, content);
   fs.chmodSync(filePath, 0o755);
@@ -376,7 +487,6 @@ case "$EVENT" in
     ;;
   preCompact)
     mind checkpoint set "$PROJECT_SPACE" "Cursor pre-compact" "Snapshot context before compaction" --notes "cursor:event=preCompact" >/dev/null 2>&1 || true
-    mind checkpoint recover "$PROJECT_SPACE" --history >/dev/null 2>&1 || true
     ;;
   stop)
     mind checkpoint set "$PROJECT_SPACE" "Cursor session stop" "Persist final continuity notes" --notes "cursor:event=stop" >/dev/null 2>&1 || true
@@ -663,7 +773,8 @@ async function setupOpenCode(
 
 async function setupClaudeCode(
   merged: Record<string, unknown>,
-  _mindPath: string
+  _mindPath: string,
+  options: RunSetupOptions = {}
 ): Promise<Record<string, unknown>> {
   const instructionsPath = ensureClaudeInstructionPath();
   ensureClaudeManagedInstructions(instructionsPath);
@@ -680,11 +791,12 @@ async function setupClaudeCode(
     console.log(`⚠️ skill installation failed: ${message}`);
   }
 
-  if (shouldEnableClaudeHooks()) {
+  const shouldRefreshHooks = options.refreshExistingClaudeHooks && hasClaudeHooksSignal();
+  if (shouldEnableClaudeHooks() || shouldRefreshHooks) {
     try {
       const hookScriptPath = ensureClaudeHookScript();
       merged = withClaudeHooksConfig(merged, hookScriptPath);
-      console.log(`✅ Claude hooks opt-in enabled`);
+      console.log(`✅ Claude hooks configured`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.log(`⚠️ hooks setup failed: ${message}`);
@@ -806,7 +918,15 @@ function removeLegacyUrlField(merged: Record<string, unknown>): void {
   }
 }
 
-export async function runSetup(agent: SupportedAgent): Promise<void> {
+export interface RunSetupOptions {
+  skipExternalCli?: boolean;
+  refreshExistingClaudeHooks?: boolean;
+}
+
+export async function runSetup(
+  agent: SupportedAgent,
+  options: RunSetupOptions = {}
+): Promise<void> {
   const cfg = getAgentConfig(agent);
   const mcpUrl = `http://localhost:${getMcpPort()}/mcp`;
   const mindPath = getMindScriptPath();
@@ -815,9 +935,11 @@ export async function runSetup(agent: SupportedAgent): Promise<void> {
   let claudeCliSucceeded = false;
   let claudeFallbackWritePath: string | undefined;
 
+  const isJsonc = cfg.configPath.endsWith('.jsonc');
+
   if (cfg.format === 'json') {
     // For claude-code, try official CLI first before building merged config
-    if (agent === 'claude-code') {
+    if (agent === 'claude-code' && !options.skipExternalCli) {
       const cliResult = tryClaudeMcpAdd(mindPath);
 
       if (cliResult.ok) {
@@ -828,6 +950,8 @@ export async function runSetup(agent: SupportedAgent): Promise<void> {
         console.warn('  - Falling back to JSON config...');
         claudeFallbackWritePath = path.join(getHomeDir(), '.claude.json');
       }
+    } else if (agent === 'claude-code' && fs.existsSync(path.join(getHomeDir(), '.claude.json'))) {
+      claudeFallbackWritePath = path.join(getHomeDir(), '.claude.json');
     }
 
     // For claude-code fallback path: read from fallback if it exists, otherwise from primary config
@@ -838,16 +962,25 @@ export async function runSetup(agent: SupportedAgent): Promise<void> {
     } else if (agent !== 'claude-code') {
       readPath = cfg.configPath;
     }
-    let merged = deepMerge(
-      readJson(readPath),
-      cfg.build(mcpUrl, mindPath) as Record<string, unknown>
-    );
+    let merged: Record<string, unknown>;
+    try {
+      merged = deepMerge(
+        isJsonc ? readJsonc(readPath) : readJson(readPath),
+        cfg.build(mcpUrl, mindPath) as Record<string, unknown>
+      );
+    } catch (err) {
+      if (err instanceof MalformedConfigError) {
+        console.error(`\n❌ ${err.message}`);
+        throw err;
+      }
+      throw err;
+    }
 
     // Delegate to agent-specific handlers
     if (agent === 'opencode') {
       merged = await setupOpenCode(merged, mindPath);
     } else if (agent === 'claude-code') {
-      merged = await setupClaudeCode(merged, mindPath);
+      merged = await setupClaudeCode(merged, mindPath, options);
     } else if (agent === 'cursor') {
       merged = await setupCursor(merged);
     } else if (agent === 'windsurf') {
@@ -871,13 +1004,47 @@ export async function runSetup(agent: SupportedAgent): Promise<void> {
       // CLI handled MCP registration, nothing to write
     } else {
       const writePath = claudeFallbackWritePath ?? cfg.configPath;
-      writeJson(writePath, merged);
+      if (writePath.endsWith('.jsonc')) {
+        writeJsonc(writePath, current => deepMerge(current, merged));
+      } else {
+        writeJson(writePath, merged);
+      }
     }
   } else {
+    // TOML agents (currently codex). The contract is parse-safely +
+    // backup + atomic + surgical-edit. If a [mcp_servers.mind] stanza
+    // already exists and matches the freshly-built snippet, the write
+    // is a no-op (no backup, no rewrite). If the existing stanza
+    // differs, it is replaced in place, preserving unrelated tables
+    // and comments. If no mind stanza exists, the snippet is appended.
+    // Malformed existing TOML throws MalformedConfigError and the file
+    // is left byte-for-byte unchanged.
+    readTomlOrThrow(cfg.configPath);
+
     const current = readText(cfg.configPath);
     const snippet = cfg.build(mcpUrl, mindPath) as string;
-    const merged = current.includes('[mcp_servers.mind]') ? current : `${current}${snippet}`;
-    writeText(cfg.configPath, merged);
+    const bounds = findTomlTableStanzaBounds(current, 'mcp_servers.mind');
+
+    let nextText: string;
+    if (bounds === null) {
+      nextText = current.length === 0 ? snippet.replace(/^\n+/, '') : `${current}${snippet}`;
+    } else {
+      // The snippet carries a leading separator (`\n`) for the append
+      // path. When we slice the existing text, the separator lives
+      // BEFORE `bounds.start` and is therefore NOT part of the slice.
+      // Normalize both sides by stripping leading whitespace before we
+      // decide whether a rewrite would change anything.
+      const existingStanza = current.slice(bounds.start, bounds.end);
+      const normalize = (s: string): string => s.replace(/^\s+/, '');
+      nextText =
+        normalize(existingStanza) === normalize(snippet)
+          ? current
+          : current.slice(0, bounds.start) + snippet + current.slice(bounds.end);
+    }
+
+    if (nextText !== current) {
+      safeWriteToml(cfg.configPath, nextText);
+    }
 
     if (agent === 'codex') {
       await setupCodex(cfg.configPath, snippet);
@@ -893,6 +1060,152 @@ export async function runSetup(agent: SupportedAgent): Promise<void> {
     }
   }
   printCapabilityDiagnostics(cfg.capabilities);
+}
+
+export interface SetupRefreshOptions {
+  mode?: 'detected' | 'all';
+  agent?: SupportedAgent;
+  dryRun?: boolean;
+}
+
+export interface SetupRefreshResult {
+  refreshedAgents: SupportedAgent[];
+  skippedAgents: SupportedAgent[];
+}
+
+function getSharedSkillPath(): string {
+  return path.join(getHomeDir(), '.agents', 'skills', 'mind-management', 'SKILL.md');
+}
+
+function getAgentSkillSignalPath(agent: SupportedAgent): string | null {
+  const home = getHomeDir();
+  switch (agent) {
+    case 'opencode':
+      return path.join(home, '.config', 'opencode', 'skills', 'mind-management', 'SKILL.md');
+    case 'claude-code':
+      return path.join(home, '.claude', 'skills', 'mind-management', 'SKILL.md');
+    case 'cursor':
+      return path.join(home, '.cursor', 'skills', 'mind-management', 'SKILL.md');
+    case 'gemini-cli':
+      return path.join(home, '.gemini', 'skills', 'mind-management', 'SKILL.md');
+    case 'antigravity':
+      return path.join(home, '.gemini', 'antigravity', 'skills', 'mind-management', 'SKILL.md');
+    case 'codex':
+    case 'windsurf':
+    case 'vscode':
+      return getSharedSkillPath();
+  }
+}
+
+function hasAgentSkillSignal(agent: SupportedAgent): boolean {
+  const skillPath = getAgentSkillSignalPath(agent);
+  if (!skillPath || !fs.existsSync(skillPath)) {
+    return false;
+  }
+
+  if (!['codex', 'windsurf', 'vscode'].includes(agent)) {
+    return true;
+  }
+
+  const cfg = getAgentConfig(agent);
+  return fs.existsSync(path.dirname(cfg.configPath));
+}
+
+function textFileContains(filePath: string, text: string): boolean {
+  return readText(filePath).includes(text);
+}
+
+export function isAgentIntegrationDetected(agent: SupportedAgent): boolean {
+  const home = getHomeDir();
+  const cfg = getAgentConfig(agent);
+
+  if (hasMindMcpInAgentConfig(cfg) || hasAgentSkillSignal(agent)) {
+    return true;
+  }
+
+  switch (agent) {
+    case 'opencode':
+      return (
+        fs.existsSync(
+          path.join(home, '.config', 'opencode', 'instructions', OPENCODE_MEMORY_PROTOCOL_FILENAME)
+        ) ||
+        fs.existsSync(
+          path.join(home, '.config', 'opencode', 'plugins', OPENCODE_AUTOMATION_PLUGIN_FILENAME)
+        )
+      );
+    case 'claude-code':
+      return (
+        jsonFileHasMindMcp(path.join(home, '.claude.json')) ||
+        fs.existsSync(
+          path.join(home, '.claude', 'instructions', CLAUDE_MEMORY_PROTOCOL_FILENAME)
+        ) ||
+        textFileContains(path.join(home, '.claude', 'CLAUDE.md'), CLAUDE_MANAGED_BLOCK_START) ||
+        hasClaudeHooksSignal()
+      );
+    case 'codex':
+      return (
+        textFileContains(cfg.configPath, '[mcp_servers.mind]') ||
+        textFileContains(path.join(home, '.codex', 'AGENTS.md'), CLAUDE_MANAGED_BLOCK_START)
+      );
+    case 'cursor':
+      return (
+        (fs.existsSync(path.join(home, '.cursor', 'hooks.json')) &&
+          textFileContains(path.join(home, '.cursor', 'hooks.json'), CURSOR_HOOK_SCRIPT_NAME)) ||
+        fs.existsSync(path.join(home, '.cursor', 'hooks', CURSOR_HOOK_SCRIPT_NAME))
+      );
+    case 'windsurf':
+    case 'gemini-cli':
+    case 'vscode':
+    case 'antigravity':
+      return false;
+  }
+}
+
+function getRefreshCandidateAgents(agent?: SupportedAgent): SupportedAgent[] {
+  if (!agent) {
+    return getSupportedAgents() as SupportedAgent[];
+  }
+
+  if (!getSupportedAgents().includes(agent)) {
+    throw new Error(`Unsupported agent: ${agent}`);
+  }
+  return [agent];
+}
+
+export async function runSetupRefresh(
+  options: SetupRefreshOptions = {}
+): Promise<SetupRefreshResult> {
+  const mode = options.mode ?? 'detected';
+  const candidates = getRefreshCandidateAgents(options.agent);
+  const refreshedAgents: SupportedAgent[] = [];
+  const skippedAgents: SupportedAgent[] = [];
+
+  for (const agent of candidates) {
+    const detected = mode === 'all' || isAgentIntegrationDetected(agent);
+    if (!detected) {
+      skippedAgents.push(agent);
+      continue;
+    }
+
+    refreshedAgents.push(agent);
+    if (options.dryRun) {
+      console.log(`Would refresh ${agent}`);
+      continue;
+    }
+
+    await runSetup(agent, {
+      skipExternalCli: true,
+      refreshExistingClaudeHooks: true,
+    });
+  }
+
+  if (refreshedAgents.length === 0) {
+    console.log('No detected mind integrations to refresh.');
+  } else if (!options.dryRun) {
+    console.log(`✅ Refreshed integrations: ${refreshedAgents.join(', ')}`);
+  }
+
+  return { refreshedAgents, skippedAgents };
 }
 
 function getAgentBadge(status: 'supported' | 'unsupported' | 'unverified'): string {

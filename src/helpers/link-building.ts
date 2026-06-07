@@ -1,6 +1,6 @@
 // ── Link-building helpers ──
 
-import type { MindStore, LinkedMemorySummary } from '../store/mind-store';
+import type { LinkedMemorySummary, MindStore } from '../store/mind-store';
 
 /**
  * Enriched link format returned by checkpoint_load and memory_read.
@@ -60,7 +60,7 @@ export function mapLinkedSummariesToLinksFormat(summaries: {
  */
 export function buildLinkedMemoriesArray(
   store: MindStore,
-  memoryId: number,
+  memoryId: string,
   limit?: number
 ): EnrichedLink[] {
   const linked_memories: EnrichedLink[] = [];

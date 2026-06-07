@@ -53,6 +53,8 @@ function expectNoBoundaryLeaks(value: unknown) {
   expect(record).not.toHaveProperty('last_accessed_at');
   expect(record).not.toHaveProperty('created_at');
   expect(record).not.toHaveProperty('updated_at');
+  expect(record).not.toHaveProperty('fts_id');
+  expect(record).not.toHaveProperty('space_id');
 
   for (const nestedValue of Object.values(record)) {
     expectNoBoundaryLeaks(nestedValue);

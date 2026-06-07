@@ -11,10 +11,13 @@ import type { Memory, Tier } from '../src/types';
 
 // ── Mock store factory ──────────────────────────────────────────────────────
 
-function createMockStore(links: any[], memories: Map<number, Memory>): MindStore {
+function createMockStore(
+  links: { source_id: string; target_id: string }[],
+  memories: Map<string, Memory>
+): MindStore {
   return {
-    getLinks: (id: number) => links.filter(l => l.source_id === id || l.target_id === id),
-    getMemoryById: (id: number) => memories.get(id) ?? null,
+    getLinks: (id: string) => links.filter(l => l.source_id === id || l.target_id === id),
+    getMemoryById: (id: string) => memories.get(id) ?? null,
     getLinkedMemorySummaries: () => ({ links_to: [], linked_by: [] }),
     // Other methods unused by helpers under test
   } as unknown as MindStore;
@@ -26,7 +29,7 @@ describe('link-building helpers', () => {
   describe('transformLinkedSummary', () => {
     test('transforms LinkedMemorySummary to EnrichedLink', () => {
       const summary: LinkedMemorySummary = {
-        id: 1,
+        id: 'summary-1',
         name: 'my-memory',
         space_name: 'projects/mind',
         tier: 2,
@@ -54,7 +57,7 @@ describe('link-building helpers', () => {
       const summaries: { links_to: LinkedMemorySummary[]; linked_by: LinkedMemorySummary[] } = {
         links_to: [
           {
-            id: 1,
+            id: 'summary-a',
             name: 'memory-a',
             space_name: 'projects/mind',
             tier: 1 as Tier,
@@ -65,7 +68,7 @@ describe('link-building helpers', () => {
         ],
         linked_by: [
           {
-            id: 2,
+            id: 'summary-b',
             name: 'memory-b',
             space_name: 'projects/mind',
             tier: 2 as Tier,
@@ -112,8 +115,9 @@ describe('link-building helpers', () => {
   describe('buildLinkedMemoriesArray', () => {
     test('builds enriched linked_memories array from store', () => {
       const linkedMem: Memory = {
-        id: 42,
+        id: 'memory-42',
         space_name: 'projects/mind',
+        space_id: 'test-space-uuid',
         name: 'linked-memory',
         content: 'some content',
         tier: 2,
@@ -127,11 +131,11 @@ describe('link-building helpers', () => {
         changed_at: '2026-03-15 14:30:00',
       };
 
-      const links = [{ source_id: 10, target_id: 42 }];
-      const memories = new Map<number, Memory>([[42, linkedMem]]);
+      const links = [{ source_id: '10', target_id: 'memory-42' }];
+      const memories = new Map<string, Memory>([['memory-42', linkedMem]]);
       const store = createMockStore(links, memories);
 
-      const result = buildLinkedMemoriesArray(store, 10, 5);
+      const result = buildLinkedMemoriesArray(store, '10', 5);
 
       expect(result).toHaveLength(1);
       expect(result[0]).toEqual({
@@ -146,20 +150,21 @@ describe('link-building helpers', () => {
     });
 
     test('respects limit parameter', () => {
-      const memories = new Map<number, Memory>();
+      const memories = new Map<string, Memory>();
       const links = [
-        { source_id: 1, target_id: 2 },
-        { source_id: 1, target_id: 3 },
-        { source_id: 1, target_id: 4 },
-        { source_id: 1, target_id: 5 },
-        { source_id: 1, target_id: 6 },
-        { source_id: 1, target_id: 7 },
+        { source_id: '1', target_id: 'mem-id-2' },
+        { source_id: '1', target_id: 'mem-id-3' },
+        { source_id: '1', target_id: 'mem-id-4' },
+        { source_id: '1', target_id: 'mem-id-5' },
+        { source_id: '1', target_id: 'mem-id-6' },
+        { source_id: '1', target_id: 'mem-id-7' },
       ];
 
       for (let i = 2; i <= 7; i++) {
-        memories.set(i, {
-          id: i,
+        memories.set(`mem-id-${i}`, {
+          id: `mem-id-${i}`,
           space_name: 'test',
+          space_id: 'test-space-uuid',
           name: `mem-${i}`,
           content: '',
           tier: 1,
@@ -175,17 +180,17 @@ describe('link-building helpers', () => {
       }
 
       const store = createMockStore(links, memories);
-      const result = buildLinkedMemoriesArray(store, 1, 3);
+      const result = buildLinkedMemoriesArray(store, '1', 3);
 
       expect(result).toHaveLength(3);
     });
 
     test('skips links with no corresponding memory', () => {
-      const links = [{ source_id: 1, target_id: 999 }];
-      const memories = new Map<number, Memory>();
+      const links = [{ source_id: '1', target_id: 'mem-id-999' }];
+      const memories = new Map<string, Memory>();
       const store = createMockStore(links, memories);
 
-      const result = buildLinkedMemoriesArray(store, 1, 5);
+      const result = buildLinkedMemoriesArray(store, '1', 5);
       expect(result).toHaveLength(0);
     });
   });
@@ -245,8 +250,9 @@ describe('checkpoint-content helpers', () => {
   describe('fetchCheckpointContent', () => {
     test('parses valid checkpoint JSON content', () => {
       const memory: Memory = {
-        id: 1,
+        id: 'mem-1',
         space_name: 'test',
+        space_id: 'test-space-uuid',
         name: 'checkpoint-2026-01-01',
         content: JSON.stringify({
           goal: 'Finish implementation',
@@ -278,8 +284,9 @@ describe('checkpoint-content helpers', () => {
 
     test('returns null on JSON parse error', () => {
       const memory: Memory = {
-        id: 1,
+        id: 'mem-1',
         space_name: 'test',
+        space_id: 'test-space-uuid',
         name: 'bad-checkpoint',
         content: 'not valid json {{{',
         tier: 1,
@@ -299,8 +306,9 @@ describe('checkpoint-content helpers', () => {
 
     test('handles missing fields in JSON with defaults', () => {
       const memory: Memory = {
-        id: 1,
+        id: 'mem-1',
         space_name: 'test',
+        space_id: 'test-space-uuid',
         name: 'checkpoint-minimal',
         content: JSON.stringify({ goal: 'Only goal' }),
         tier: 1,

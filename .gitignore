@@ -42,3 +42,5 @@ data/
 
 .husky/
 .lintstagedrc.json
+.mind/
+session-examples/

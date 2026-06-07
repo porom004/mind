@@ -4,7 +4,7 @@ const TWO_PI = Math.PI * 2;
 
 /** @typedef {{ scale:number, tx:number, ty:number }} GraphTransform */
 /** @typedef {{ factor:number, anchorX:number, anchorY:number, minScale:number, maxScale:number }} ZoomOptions */
-/** @typedef {{ id:number, tier?:number, links_to:number[], linked_by:number[] }} GraphNode */
+/** @typedef {{ id:string, tier?:number, links_to:string[], linked_by:string[] }} GraphNode */
 /** @typedef {{ x:number, y:number }} Point */
 /** @typedef {{ centerX?:number, centerY?:number, tierRadius?:Record<1|2|3, number> }} LayoutOptions */
 
@@ -219,12 +219,12 @@ function seededOffset(id) {
 
 export {
   buildGraphLayerOrder,
-  computeLabelY,
-  zoomTransformAtAnchor,
+  buildNeighborhoodFocus,
   computeLabelFontSize,
-  truncateGraphLabel,
+  computeLabelY,
   computeNodeCircleRadius,
   computeNodeFillOpacity,
-  buildNeighborhoodFocus,
   layoutGraph,
+  truncateGraphLabel,
+  zoomTransformAtAnchor,
 };

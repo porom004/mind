@@ -1,11 +1,13 @@
 type InternalMemoryFields = {
-  id?: number;
+  id?: string;
   space_name: string;
   access_count?: number;
   last_accessed_at?: string | null;
   embedding?: unknown;
   created_at?: string;
   updated_at?: string;
+  fts_id?: number;
+  space_id?: string;
 };
 
 type InternalSpaceFields = {
@@ -14,7 +16,7 @@ type InternalSpaceFields = {
 };
 
 type InternalHotMemoryFields = {
-  id?: number;
+  id?: string;
   space_name?: string;
   access_count?: number;
   last_accessed_at?: string | null;
@@ -23,6 +25,7 @@ type InternalHotMemoryFields = {
   created_at?: string;
   updated_at?: string;
   changed_at?: string;
+  space_id?: string;
 };
 
 export function presentMemoryResponse<T extends InternalMemoryFields>(obj: T) {
@@ -34,6 +37,8 @@ export function presentMemoryResponse<T extends InternalMemoryFields>(obj: T) {
     embedding: _embedding,
     created_at: _created_at,
     updated_at: _updated_at,
+    fts_id: _fts_id,
+    space_id: _space_id,
     ...rest
   } = obj;
 
@@ -63,6 +68,7 @@ export function presentHotMemoryResponse<T extends InternalHotMemoryFields>(obj:
     created_at: _created_at,
     updated_at,
     changed_at,
+    space_id: _space_id,
     ...rest
   } = obj;
 

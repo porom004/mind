@@ -9,19 +9,13 @@ After this, you can proceed with space_create, memory_add, etc.
 
 **For software projects, use the directory/repo name as the space name.**
 
-This is VITAL for future agents to find your knowledge. If you use arbitrary names like "my-project" or "test123", future agents won't know where to search.
+Use actual project names so future agents can search and recover the right knowledge.
 
-### DO:
+### Recommended:
 
 - `projects/mind` — actual repo name
 - `projects/arcana-web` — actual repo name
 - `projects/api-gateway` — actual directory name
-
-### DON'T:
-
-- `projects/my-awesome-app` — too vague
-- `projects/work-stuff` — unclear
-- `projects/test123` — meaningless
 
 **Why**: Future agents search by repo/directory name. Using the actual name makes your memories discoverable.
 
@@ -55,6 +49,18 @@ You MUST create a space with `space_create` before adding memories. Memory tools
 - `cat:config` — configuration
 - `cat:summary` — session summary (with type:session)
 
+### Status tags:
+
+`status:*` tags are convention-only, not schema-enforced. Use well-normed tags
+such as `status:proposed`, `status:validated`, `status:failed`,
+`status:superseded`, `status:obsolete`, `status:final`, and `status:living`.
+
+### Living reference tags:
+
+Living references must use `type:reference`, exactly one `ref:*` tag, and
+`status:living`. Recommended refs are `ref:project-map`, `ref:architecture`,
+`ref:style`, `ref:domain`, and `ref:workflow`.
+
 Before creating a new tag, query existing memories first: `memory_query { space: "*", search: "<topic>" }`.
 
 ---
@@ -64,25 +70,110 @@ Before creating a new tag, query existing memories first: `memory_query { space:
 Organize memories into hierarchical spaces:
 
 - `projects/<REPO_NAME>` — one space per project (use actual repo/directory name)
+- session summaries stay in `projects/<REPO_NAME>` as `session-*` memories tagged `type:session` + `cat:summary` at T3
 - `user/preferences` — global user preferences
 - `user/patterns` — work patterns and conventions
 - `global/config` — cross-project configuration
-- `sessions/<REPO_NAME>` — session summaries
 
 ---
 
 ## When to Save Memories
 
-Call `memory_add` IMMEDIATELY after:
+### Durable memory threshold
 
-- Bug fix completed
-- Architecture decision made
+Create or update durable memories when the information is likely useful in
+future sessions:
+
+- Stable decisions
+- Verified root causes
+- Final fixes
+- Reusable patterns
+- User preferences
+- Significant config/domain facts
+
+Keep transient observations, routine progress, and routine validation results with no new findings in checkpoints or session summaries.
+
+Durable memories are separate from session summaries. Use durable memories when
+future sessions need stable decisions, root causes, patterns, preferences,
+config, or domain facts.
+
+Use `memory_add` after:
+
+- Durable bug fix completed
+- Architecture or workflow decision made
 - Non-obvious technical discovery
 - Configuration or environment change
 - Pattern established
 - User preference learned
 
-**When to link**: When a memory depends on, extends, or contradicts another. Pass `links_to` with `"space:name"` references. `links_to` is best-effort — always check `links_failed` in the response. The memory is always created even if some links fail.
+**When to link**: When a new memory depends on, updates, or explains another memory, pass related memories in `links_to`. After adding with `links_to`, check `links_created` and `links_failed`; retry important failed links with `link_create`.
+
+Persist verified root causes, regressions, risk decisions, or durable validation
+patterns. Don't persist routine validation outcomes unless they change future
+work.
+
+---
+
+## Memory Types
+
+- Checkpoint = live/ephemeral work state. Keep goal, pending work, blockers,
+  and next action here.
+- Session summary = chronological log/recovery record. It preserves what
+  happened, but it is evidence, not canonical truth.
+- Durable/canonical memory = atomic actionable knowledge for future sessions.
+- Living reference memory = maintained current truth map for a project, domain,
+  architecture, style, or workflow.
+
+| Need                                                                          | Use                                                | Result                               |
+| ----------------------------------------------------------------------------- | -------------------------------------------------- | ------------------------------------ |
+| Live goal, pending work, blockers, or next action                             | `checkpoint_save`                                  | Active checkpoint                    |
+| End-of-session recovery log                                                   | `checkpoint_done`                                  | Same-space `session-*` summary at T3 |
+| Stable decisions, root causes, patterns, preferences, config, or domain facts | `memory_add` / `memory_update`                     | Durable memory                       |
+| Compact current truth map                                                     | `memory_add` / `memory_update` with reference tags | Living reference                     |
+| Obsolete knowledge with no historical value                                   | `memory_delete`                                    | Removed memory                       |
+
+---
+
+## Living Reference Memories
+
+Living references are compact current truth. Create them at T2 by default; let
+reads naturally promote them to T1. Pin only 1–3 critical references when
+explicitly warranted or approved.
+
+Tags are authoritative. Required tags: `type:reference`, exactly one `ref:*`, and `status:living`.
+Recommended refs are `ref:project-map`, `ref:architecture`, `ref:style`,
+`ref:domain`, and `ref:workflow`. The `ref:*` tag defines the reference category; the memory name is the readable identifier.
+
+Recommended names: `architecture-overview`, `project-map`, `style-guide`, `domain-model`, and `workflow-notes`.
+
+Recommended name examples:
+
+- `architecture-overview`
+- `project-map`
+- `style-guide`
+- `domain-model`
+- `workflow-notes`
+
+Recommended sections:
+
+- Purpose
+- Current truth
+- Key areas/files/concepts
+- Active conventions
+- Source memories
+- Last reviewed
+- Maintenance notes
+
+When current truth changes, use `memory_update` on the living reference and
+link it to source memories. Sessions remain evidence/logs, not canonical truth.
+
+---
+
+## Cautious Deletion
+
+Use `memory_delete` only when a memory is clearly obsolete, no longer
+applicable, and has no historical value. Otherwise, mark it with
+`status:obsolete` or `status:superseded` and link the replacement.
 
 ---
 
@@ -152,7 +243,7 @@ For list tools (`memory_query`):
 2. **Work**: Add memories as you go with `memory_add` — include tags and `links_to`
 3. **Query**: Find context with `memory_query { search: "<keywords>" }`
 4. **Checkpoint**: Save progress with `checkpoint_save`
-5. **Close**: `checkpoint_done` — transforms checkpoint to session memory in `sessions/<REPO_NAME>` and deletes the checkpoint
+5. **Close**: Checkpoints hold live state; `checkpoint_done` completes the active checkpoint and creates a same-space `session-*` summary memory in `projects/<REPO_NAME>` with `type:session` + `cat:summary` at T3.
 
 ---
 
@@ -189,13 +280,11 @@ memory_query { space: "projects/mind", tag: "cat:decision" }
 // 5. Search memories
 memory_query { space: "projects/mind", search: "authentication" }
 
-// 6. Session end: summarize
-memory_add {
-  space: "sessions/mind",
-  name: "session-2026-03-07",
-  content: "## Goal: ...\n## Accomplished: ...\n## Decisions: ...",
-  tags: ["type:session", "cat:summary"],
-  links_to: ["projects/mind:JWT over sessions for auth"]
+// 6. Session end: close the checkpoint
+checkpoint_done {
+  space: "projects/mind",
+  checkpointName: "checkpoint-2026-03-07T10-00-00-000Z",
+  summary: "## Goal: ...\n## Accomplished: ...\n## Decisions: ..."
 }
 ```
 

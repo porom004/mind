@@ -23,9 +23,65 @@ Guidelines:
 
 Example:
 
-- `Added \\`mind update --check\\` to verify available releases without installing.`
+- `Added \`mind update --check\` to verify available releases without installing.`
 
 ## [Unreleased]
+
+## [1.4.0] - 2026-04-10
+
+### Added
+
+- Added autosync commands that mirror spaces into versioned `.mind/` files,
+  making project memories easier to review, share, and recover.
+- Added `mind setup refresh` so existing agent integrations can stay aligned
+  after updates without recreating unrelated configs.
+- Added `mind migrate sessions <project-space> [--dry-run]` to move older
+  `sessions/<repo>` summaries into the project space with preserved links.
+- Added maintainer release automation support for curated GitHub release notes
+  with `--notes-file <path>` and package-lock version alignment.
+- Added `opencode.jsonc` support for OpenCode: `mind setup opencode` now
+  prefers `~/.config/opencode/opencode.jsonc` over `opencode.json` when both
+  exist, and never creates `opencode.json` if `opencode.jsonc` is already
+  present. The new safe-config helpers (`src/setup/safe-config.ts`) parse
+  JSONC with comments and trailing commas, and use `jsonc-parser.modify` to
+  preserve comments when editing existing keys.
+
+### Changed
+
+- Changed database migrations to create verified backups, restore automatically
+  on migration failures, and keep the latest automatic backups.
+- Changed `mind update` to validate migrations before refreshing integrations,
+  reducing the chance of an update leaving agents on stale protocol files.
+- Changed session summaries to live in `projects/<repo>` as same-space
+  `session-*` memories. If you have older summaries under `sessions/<repo>`,
+  run `mind setup` after `mind update`, then run
+  `mind migrate sessions projects/<repo> --dry-run` first and
+  `mind migrate sessions projects/<repo>` after you review the dry run.
+- **UUID Primary IDs migration**: Converted `spaces` and `memories` from INTEGER AUTOINCREMENT to UUID TEXT primary keys. Added `memories.fts_id` (INTEGER) as local surrogate for SQLite FTS5 rowid. Added `memories.space_id` (TEXT FK) normalizing the relationship to `spaces`. Added `fts_id_sequence` table for transactional ID assignment. Migrated autosync to manifest v1 with UUID entries and space UUID directories. MCP/CLI public contracts preserved (name-based). Schema version 7 → 8.
+
+### Fixed
+
+- Fixed a critical data-loss bug in `mind setup` and `mind setup refresh` where
+  a malformed JSON/JSONC config file could be silently overwritten with an
+  empty default, destroying the user's existing agent configuration. Setup now
+  parses existing files strictly, aborts the run on parse failure, and creates
+  a timestamped backup before any content-changing write. Writes go through a
+  temp-file-then-rename so a crash mid-write cannot leave a partial file in
+  place. Affects all supported agents: opencode, claude-code, codex, cursor,
+  windsurf, gemini-cli, vscode, antigravity.
+- Fixed a Codex `~/.codex/config.toml` regression where the file was appended
+  via raw text instead of the safe-config pipeline. A malformed TOML file no
+  longer crashes setup, an outdated `[mcp_servers.mind]` stanza is now
+  replaced in place while preserving unrelated tables and comments, and
+  `isAgentIntegrationDetected('codex')` no longer probes the TOML file with
+  `JSON.parse` (it now uses a TOML-aware probe). `MalformedConfigError.parser`
+  is widened to `'json' | 'jsonc' | 'toml'`. The Codex write path now goes
+  through `readTomlOrThrow` + `safeWriteToml` (Bun.TOML.parse with a
+  feature-detect guard, no new TOML npm dependency).
+- Fixed the public installer launcher so new installs run the current
+  `src/mind.ts` entry point.
+- Fixed protocol wording and update flows that could confuse agent workflows
+  during setup, migration, or session recovery.
 
 ## [1.4.0] - 2026-04-10
 

@@ -59,9 +59,10 @@ space_create {
 
 **Space naming**: Always use the actual repo/directory name. Future agents find memories by searching the repo name.
 
-### 3. WORK — Persist as you go
+### 3. WORK — Persist the right state
 
-Every significant action produces a memory or checkpoint update.
+Use checkpoints for live/ephemeral work state. Create durable memories when
+knowledge is likely useful in future sessions.
 
 ### 4. CLOSE — Summarize and complete
 
@@ -72,13 +73,26 @@ checkpoint_done {
 }
 ```
 
-`checkpoint_done` automatically creates a session memory in `sessions/<repo>` and deletes the checkpoint. Optionally, you may enrich it with `memory_update` after if more detail is needed.
+Checkpoints hold live state; `checkpoint_done` completes the active checkpoint
+and creates a same-space `session-*` summary memory in `projects/<repo>` with
+`type:session` + `cat:summary` at T3. Optionally, enrich it with
+`memory_update` if more detail is needed.
 
 ---
 
 ## When to Create Memories
 
-Call `memory_add` **immediately** after:
+### Durable memory threshold
+
+Call `memory_add` or `memory_update` when the information is likely useful in
+future sessions: stable decisions, verified root causes, final fixes, reusable
+patterns, user preferences, or significant config/domain facts.
+
+Keep transient observations, routine progress, and routine validation results with no new findings in checkpoints or session summaries.
+
+Durable memories are separate from session summaries. Use durable memories when
+future sessions need stable decisions, root causes, patterns, preferences,
+config, or domain facts.
 
 | Event                   | Tag              |
 | ----------------------- | ---------------- |
@@ -88,6 +102,56 @@ Call `memory_add` **immediately** after:
 | Pattern established     | `cat:pattern`    |
 | Config or env change    | `cat:config`     |
 | User preference learned | `cat:preference` |
+
+Persist verified root causes, regressions, risk decisions, or durable validation
+patterns. Don't persist routine validation outcomes unless they change future
+work.
+
+## Memory Types
+
+- Checkpoint = live/ephemeral work state: goal, pending work, blockers, and
+  next action.
+- Session summary = chronological log/recovery record. It is evidence, not
+  canonical truth.
+- Durable/canonical memory = atomic actionable knowledge for future sessions.
+- Living reference memory = maintained current truth map for a project, domain,
+  architecture, style, or workflow.
+
+| Need                                                                          | Use                                                | Result                               |
+| ----------------------------------------------------------------------------- | -------------------------------------------------- | ------------------------------------ |
+| Live goal, pending work, blockers, or next action                             | `checkpoint_save`                                  | Active checkpoint                    |
+| End-of-session recovery log                                                   | `checkpoint_done`                                  | Same-space `session-*` summary at T3 |
+| Stable decisions, root causes, patterns, preferences, config, or domain facts | `memory_add` / `memory_update`                     | Durable memory                       |
+| Compact current truth map                                                     | `memory_add` / `memory_update` with reference tags | Living reference                     |
+| Obsolete knowledge with no historical value                                   | `memory_delete`                                    | Removed memory                       |
+
+## Status Tags
+
+`status:*` tags are convention-only, not schema-enforced. Use well-normed tags
+such as `status:proposed`, `status:validated`, `status:failed`,
+`status:superseded`, `status:obsolete`, `status:final`, and `status:living`.
+
+## Living Reference Memories
+
+Use living references for compact current truth. Create them at T2 by default;
+let reads naturally promote them to T1. Pin only 1–3 critical references when
+explicitly warranted or approved.
+
+Tags are authoritative. Required tags: `type:reference`, exactly one `ref:*`, and `status:living`.
+Recommended refs: `ref:project-map`, `ref:architecture`, `ref:style`,
+`ref:domain`, `ref:workflow`. The `ref:*` tag defines the reference category; the memory name is the readable identifier.
+
+Recommended names: `architecture-overview`, `project-map`, `style-guide`, `domain-model`, and `workflow-notes`.
+
+Recommended sections: Purpose, Current truth, Key areas/files/concepts, Active
+conventions, Source memories, Last reviewed, Maintenance notes.
+
+When current truth changes, use `memory_update` on the living reference and
+link it to source memories. Sessions remain evidence/logs, not canonical truth.
+
+Use `memory_delete` only when a memory is clearly obsolete, no longer
+applicable, and has no historical value. Otherwise, mark it with
+`status:obsolete` or `status:superseded` and link the replacement.
 
 ### Memory Content Format
 
@@ -107,7 +171,8 @@ memory_add {
 
 ## Linking Memories
 
-Links turn isolated notes into a knowledge graph. **Always link when a relationship exists.**
+Links turn isolated notes into a knowledge graph. Link memories when the
+relationship helps future recovery.
 
 ### When to Link
 
@@ -145,7 +210,8 @@ link_create {
 
 References use `space:name` format. Bare names work for same-space memories.
 
-**Important**: `links_to` is best-effort. Always check `links_failed` in the response.
+When a new memory depends on, updates, or explains another memory, pass related memories in `links_to`.
+After adding with `links_to`, check `links_created` and `links_failed`; retry important failed links with `link_create`.
 
 ---
 
@@ -189,7 +255,9 @@ checkpoint_done {
 }
 ```
 
-`checkpoint_done` transforms the checkpoint into a session memory in `sessions/<repo>` and deletes the checkpoint.
+Checkpoints hold live state; `checkpoint_done` completes the active checkpoint
+and creates a same-space `session-*` summary memory in `projects/<repo>` with
+`type:session` + `cat:summary` at T3.
 
 ---
 
@@ -212,26 +280,26 @@ checkpoint_done {
 
 ## Tool Quick Reference
 
-| Tool                  | Purpose                                                                               |
-| --------------------- | ------------------------------------------------------------------------------------- |
-| `space_create`        | Create space (required before adding memories). Tags required.                        |
-| `space_get`           | Get space details + hot memories preview                                              |
-| `space_list`          | List spaces, optionally by tag                                                        |
-| `space_update`        | Update description and/or tags                                                        |
-| `space_delete`        | Delete space + all contents permanently                                               |
-| `memory_add`          | Add memory with tags. `links_to` is best-effort — check `links_failed` in response.   |
-| `memory_read`         | Read + auto-promote. Use `noPromote:true` for read without side effects.              |
-| `memory_update`       | Update name, content, or replace tags                                                 |
-| `memory_delete`       | Delete memory + all its links                                                         |
-| `memory_query`        | Query by metadata. Use `search` parameter for full-text search.                       |
-| `status`              | Storage stats (counts per tier, links, spaces)                                        |
-| `link_create`         | Link two memories by `space:name` ref                                                 |
-| `link_delete`         | Remove a link between two memories                                                    |
-| `checkpoint_save`     | Save/update session state (goal, pending, notes)                                      |
-| `checkpoint_load`     | Restore a specific checkpoint by name (use checkpoint_query first)                    |
-| `checkpoint_done`     | Transform checkpoint to session memory in `sessions/<repo>` and delete the checkpoint |
-| `checkpoint_query`    | Query checkpoints with filters: status, date range, tag, limit/offset                 |
-| `system_instructions` | Get full protocol documentation                                                       |
+| Tool                  | Purpose                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `space_create`        | Create space (required before adding memories). Tags required.                                               |
+| `space_get`           | Get space details + hot memories preview                                                                     |
+| `space_list`          | List spaces, optionally by tag                                                                               |
+| `space_update`        | Update description and/or tags                                                                               |
+| `space_delete`        | Delete space + all contents permanently                                                                      |
+| `memory_add`          | Add memory with tags. `links_to` is best-effort — check `links_failed` in response.                          |
+| `memory_read`         | Read + auto-promote. Use `noPromote:true` for read without side effects.                                     |
+| `memory_update`       | Update name, content, or replace tags                                                                        |
+| `memory_delete`       | Delete memory + all its links                                                                                |
+| `memory_query`        | Query by metadata. Use `search` parameter for full-text search.                                              |
+| `status`              | Storage stats (counts per tier, links, spaces)                                                               |
+| `link_create`         | Link two memories by `space:name` ref                                                                        |
+| `link_delete`         | Remove a link between two memories                                                                           |
+| `checkpoint_save`     | Save/update session state (goal, pending, notes)                                                             |
+| `checkpoint_load`     | Restore a specific checkpoint by name (use checkpoint_query first)                                           |
+| `checkpoint_done`     | Transform checkpoint to same-space `session-*` summary memory in `projects/<repo>` and delete the checkpoint |
+| `checkpoint_query`    | Query checkpoints with filters: status, date range, tag, limit/offset                                        |
+| `system_instructions` | Get full protocol documentation                                                                              |
 
 ---
 

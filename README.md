@@ -17,6 +17,8 @@ modify that memory through the CLI and web UI.
   and web UI.
 - **Resumption tools included.** Checkpoints and session summaries help recover
   context and continue work.
+- **Optional file sync.** Experimental autosync can mirror project spaces into
+  versioned `.mind/` files.
 - **Search when you need it.** Full-text search is built in, and semantic
   search is available as an optional add-on.
 
@@ -73,6 +75,11 @@ Then run:
 mind help
 ```
 
+The installer creates a launcher that runs the installed `src/mind.ts` entry
+point. It doesn't configure every supported agent automatically. To refresh
+existing mind-managed agent integrations after installation, run
+`mind setup refresh`.
+
 ### Requirements
 
 - [Bun](https://bun.sh/) 1.2+ (auto installed by the one-line installer if not present)
@@ -120,7 +127,14 @@ mind setup windsurf
 mind setup gemini-cli
 mind setup vscode
 mind setup antigravity
+mind setup refresh      # refresh detected mind-managed integrations
 ```
+
+`mind setup refresh` is conservative by default. It refreshes only detected
+integrations, where detection means mind finds an existing mind-owned signal,
+such as an MCP config, managed protocol block, hook/plugin/script, or installed
+mind-management skill. Use `--dry-run` to preview changes, `--all` to refresh
+all supported agents, or `--agent <name>` to target one agent.
 
 ### Post-install configuration
 
@@ -189,12 +203,113 @@ mind read <space> <name>
 mind checkpoint set <space> "goal" "pending"
 mind checkpoint recover <space> --name <checkpoint-name>
 mind checkpoint complete <space> <name> "what was done"
+mind migrate sessions projects/<repo> --dry-run
 mind checkpoint list <space> --status active
 mind search "query"
 mind query --space <space> --from 2026-01-01 --to 2026-12-31 --limit 20 --offset 0
 mind update --check
 mind update
 ```
+
+### Autosync (Experimental)
+
+Autosync lets you mirror project spaces to a versioned `.mind/` directory so
+you can review memory files in git, edit markdown on disk, and sync those
+changes back into the local database. When a space is enabled, successful DB
+mutations made through the CLI, web/API, or MCP also export the affected space
+back to `.mind/spaces/<hash>/` as a non-blocking side effect.
+
+<!-- prettier-ignore -->
+> [!NOTE]
+> This is an experimental feature currently under active development.
+
+Set up autosync with the following flow:
+
+1. Run `mind sync init` to create `.mind/config.yml` and `.mind/.gitignore`.
+2. Review or edit `.mind/config.yml` to choose which spaces are configured.
+3. Run `mind sync enable --space <name>` for the project space you want to
+   sync.
+4. Optional: Run `mind sync serve --space <name>` to start the watcher in the
+   current terminal, or rely on MCP startup to auto-start watchers for enabled
+   spaces.
+
+The `.mind/` directory uses a file-based config and hashed space directories:
+
+```text
+.mind/
+├── config.yml
+├── .gitignore
+└── spaces/
+    └── a1b2c3d4/
+        ├── manifest.json
+        └── memory-name.md
+```
+
+Use these commands to manage autosync:
+
+- `mind sync init`
+- `mind sync status`
+- `mind sync enable --space <name>`
+- `mind sync disable --space <name>`
+- `mind sync now --space <name>`
+- `mind sync export --space <name>`
+- `mind sync import --space <name>`
+- `mind sync conflict --space <name> --strategy <strategy>`
+- `mind sync remove --space <name>`
+- `mind sync config`
+- `mind sync serve --space <name>`
+
+Conflict strategies:
+
+- `db-wins` writes the DB version on real conflicts and prunes only files that
+  the manifest marks as managed.
+- `file-wins` preserves the file side on real conflicts. Automatic DB-to-file
+  exports skip the conflicting file and record a warning.
+- `latest-wins` uses normalized UTC timestamps as a tie-break after hash-based
+  dirty detection. Near-future timestamps within five minutes are accepted for
+  clock skew, while farther future timestamps are reported as unsafe and skipped
+  instead of blindly overwriting.
+
+Autosync writes manifest v2 files. Each manifest entry tracks managed file
+ownership, the memory name, path, optional DB ID, canonical content and metadata
+hashes, normalized UTC timestamps, file modification time, and the last sync
+time. Hashes decide whether the DB side, file side, both sides, or neither side
+changed since the common baseline. A file's mere existence isn't a conflict.
+
+Example `.mind/config.yml`:
+
+```yaml
+# mind autosync config
+
+version: 1
+
+# Spaces to sync with this project
+# To enable a new space, add it below with enabled: true
+# Valid conflictResolution values: db-wins, file-wins, latest-wins
+spaces:
+  # projects/mind:
+  #   enabled: true
+  #   conflictResolution: db-wins
+```
+
+Current limitations and caveats:
+
+- `mind sync status --space <name>` reports DB, file, and manifest counts,
+  dirty DB/file drift, conflicts, tombstones, missing managed files, and the
+  latest auto-export warning or error when manifest data is available.
+- Existing-memory imports update supported metadata from files when the conflict
+  strategy chooses file-to-DB: content, tags, tier, pinned state, and `links_to`
+  links. Invalid metadata skips that file safely, unresolved links are reported,
+  and frontmatter `name` does not rename existing memories.
+- Exported `links_to` values are written to frontmatter, and imports recreate
+  those links in the database.
+- Deleting a synced markdown file does not auto-delete the corresponding
+  database memory. `mind sync status` reports missing managed files as drift so
+  you can restore or delete intentionally. DB-side deletes and renames prune only
+  files that the manifest marks as managed.
+- Automatic DB-to-file export warnings are recorded in logs and don't fail the
+  original CLI, API, or MCP mutation. Explicit `sync export`, `sync import`, and
+  `sync now` commands still report sync failures visibly.
 
 ### Web Server
 
@@ -239,6 +354,9 @@ mind mcp start --http              # HTTP mode
 mind mcp start --http --detached   # HTTP background
 mind mcp stop
 ```
+
+When the MCP server starts, it auto-starts autosync watchers for spaces that
+are enabled in `.mind/config.yml`.
 
 Example MCP tool usage (for agents):
 
@@ -288,6 +406,8 @@ Checkpoint MCP tools are also available for session continuity:
 - `checkpoint_done`
 - `checkpoint_load`
 - `checkpoint_query`
+
+`checkpoint_done` now closes a live checkpoint into a same-space `session-*` summary memory in `projects/<repo>` with tags `type:session` + `cat:summary` at T3. Legacy `sessions/<repo>` content can be explicitly migrated with `mind migrate sessions <project-space> [--dry-run]`.
 
 `checkpoint_load` requires `checkpointName` (use `checkpoint_query` first to find available checkpoints). It returns full checkpoint text fields plus all linked_memories in enriched format, and checkpoint MCP payloads use `changed_at` instead of `created_at` / `updated_at`.
 
@@ -345,11 +465,14 @@ Rollout policy:
 
 `mind setup opencode` is idempotent and non-destructive:
 
-- preserves unknown keys already present in `~/.config/opencode/opencode.json`
+- prefers `~/.config/opencode/opencode.jsonc` over `opencode.json` when both exist, and never creates `opencode.json` if `opencode.jsonc` is already present. New files are created as `opencode.jsonc` (the JSONC superset of JSON that OpenCode accepts natively).
+- preserves unknown keys already present in the chosen config file
 - configures `mcp.mind` as local command transport (`type: "local"`, `command: ["<path-to-mind>", "mcp"]`)
 - writes/refreshes `~/.config/opencode/instructions/mind-memory-protocol.md`
 - ensures that instruction file is present in OpenCode's `instructions` list
 - configures prudent L3 session/compaction automation by default and non-blocking, writing `~/.config/opencode/plugins/mind-automation.js` during setup
+
+> **Setup safety contract:** all setup flows that touch a user-owned JSON/JSONC config file (opencode, claude fallback, cursor, windsurf, gemini-cli, vscode, antigravity) now go through `src/setup/safe-config.ts`. Existing files are parsed strictly — a parse failure aborts the run with a clear error rather than overwriting the file with an empty default. Content-changing writes are preceded by a timestamped sibling backup (`.bak.YYYYMMDDTHHMMSSmmmZ`) and the new content is staged in a sibling `.tmp` file and renamed into place so a crash mid-write cannot leave a partial file. The same contract applies to `mind setup refresh`.
 
 `mind setup codex` keeps setup idempotent and writes local MCP command args in `~/.codex/config.toml`:
 
@@ -379,11 +502,24 @@ mind can update itself from GitHub Releases:
 mind update --check                 # check if a newer release exists
 mind update                         # update to latest release
 mind update --version v0.1.0        # update to a specific tag
+mind update --no-refresh-integrations
 ```
+
+After a successful update, if a database existed before installation, Mind runs
+the newly installed `mind status` first. This forces automatic DB migration,
+backup validation, and restore handling before refreshing integrations. Fresh
+installs with no existing DB skip this step so `mind update` doesn't create a
+database. Mind then refreshes detected mind-managed integrations by default so
+protocols, MCP configs, hooks, plugins, scripts, skills, and managed cleanup stay
+current. Use `--no-refresh-integrations` to skip the integration refresh.
 
 ## Data Storage
 
+Mind stores its primary database in SQLite and can also keep optional
+autosync files in a versioned `.mind/` directory.
+
 - Default DB path: `data/mind.db`
+- Optional autosync config and exported files: `.mind/`
 - Override directory: `MIND_DATA_DIR=/custom/path`
 - Override full DB path: `MIND_DB_PATH=/custom/path/mind.db`
 
@@ -401,6 +537,7 @@ src/
   mcp/        # MCP command + MCP server + tools
   api/        # HTTP command, router, route modules, API server
   helpers/    # logger, tags, format, rag helpers
+  sync/       # autosync config, import/export, conflicts, file watcher
   store/      # SQLite schema + MindStore implementation
   mind.ts     # main entrypoint used by mind
 
@@ -435,7 +572,7 @@ make test-rag
 
 ## Maintainers: Releases
 
-Release management is handled via `Makefile`:
+Release management is handled via `Makefile` and `scripts/release.sh`:
 
 ```bash
 make help
@@ -443,9 +580,13 @@ make release-patch
 make release-minor
 make release-major
 make release-simulate TYPE=patch
+./scripts/release.sh minor --notes-file docs/release-notes/v1.5.0.md
 ```
 
-`release-simulate` runs a full release simulation without changing files, creating tags, or publishing a release.
+`release-simulate` runs a full release simulation without changing files, creating
+tags, or publishing a release. Real releases must run from `main`. Use
+`--notes-file <path>` when you want curated GitHub release notes; omit it to use
+GitHub's generated release notes fallback.
 
 ## Contributing
 
