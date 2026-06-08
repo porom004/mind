@@ -27,8 +27,6 @@ Example:
 
 ## [Unreleased]
 
-## [1.4.0] - 2026-04-10
-
 ### Added
 
 - Added autosync commands that mirror spaces into versioned `.mind/` files,
