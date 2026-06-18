@@ -4,7 +4,8 @@ const TWO_PI = Math.PI * 2;
 
 /** @typedef {{ scale:number, tx:number, ty:number }} GraphTransform */
 /** @typedef {{ factor:number, anchorX:number, anchorY:number, minScale:number, maxScale:number }} ZoomOptions */
-/** @typedef {{ id:string, tier?:number, links_to:string[], linked_by:string[] }} GraphNode */
+/** @typedef {string|number} GraphId */
+/** @typedef {{ id:GraphId, tier?:number, links_to:GraphId[], linked_by:GraphId[] }} GraphNode */
 /** @typedef {{ x:number, y:number }} Point */
 /** @typedef {{ centerX?:number, centerY?:number, tierRadius?:Record<1|2|3, number> }} LayoutOptions */
 
@@ -61,7 +62,7 @@ function computeNodeFillOpacity(degree) {
   return clamp(0.45 + Math.max(0, degree) * 0.08, 0.45, 0.95);
 }
 
-/** @param {GraphNode[]} nodes @param {number|null} selectedNodeId */
+/** @param {GraphNode[]} nodes @param {GraphId|null} selectedNodeId */
 function buildNeighborhoodFocus(nodes, selectedNodeId) {
   const emptyFocus = {
     active: false,
@@ -112,7 +113,7 @@ function layoutGraph(nodes, options = {}) {
     byTier[tierKey].push(node);
   }
 
-  /** @type {Map<number, any>} */
+  /** @type {Map<GraphId, Point>} */
   const positions = new Map();
   for (const tier of [1, 2, 3]) {
     const tierNodes = byTier[/** @type {1|2|3} */ (tier)];
@@ -123,9 +124,9 @@ function layoutGraph(nodes, options = {}) {
   return positions;
 }
 
-/** @param {GraphNode[]} nodes @param {number} baseRadius @param {number} centerX @param {number} centerY @param {Map<number, Point>} positions */
+/** @param {GraphNode[]} nodes @param {number} baseRadius @param {number} centerX @param {number} centerY @param {Map<GraphId, Point>} positions */
 function placeTierNodes(nodes, baseRadius, centerX, centerY, positions) {
-  const sortedNodes = [...nodes].sort((a, b) => a.id - b.id);
+  const sortedNodes = [...nodes].sort((a, b) => compareGraphIds(a.id, b.id));
   const laneCount = sortedNodes.length > 24 ? 3 : sortedNodes.length > 12 ? 2 : 1;
   const laneSpacing = 18;
   const bucketCount = Math.max(72, sortedNodes.length * 8);
@@ -138,8 +139,10 @@ function placeTierNodes(nodes, baseRadius, centerX, centerY, positions) {
 
     const laneIndex = index % laneCount;
     const laneOffset = (laneIndex - (laneCount - 1) / 2) * laneSpacing;
-    const radius = baseRadius + laneOffset + ((node.id % 5) - 2) * 2;
-    const baseAngle = ((index / sortedNodes.length) * TWO_PI + seededOffset(node.id)) % TWO_PI;
+    const idSeed = graphIdSeed(node.id);
+    const radius = baseRadius + laneOffset + ((idSeed % 5) - 2) * 2;
+    const baseAngle =
+      ((index / sortedNodes.length) * TWO_PI + seededOffset(idSeed, sortedNodes.length)) % TWO_PI;
 
     const requiredArc = 2 * Math.asin(Math.min(0.92, (nodeRadius + 8) / Math.max(1, radius)));
     const clearance = Math.max(1, Math.ceil((requiredArc / TWO_PI) * bucketCount));
@@ -211,10 +214,28 @@ function bucketToAngle(bucket, count) {
   return (normalizedBucket / count) * TWO_PI;
 }
 
-/** @param {number} id */
-function seededOffset(id) {
-  const value = Math.abs(Math.sin(id * 12.9898) * 43758.5453);
-  return (value - Math.floor(value)) * 0.6;
+/** @param {GraphId} a @param {GraphId} b */
+function compareGraphIds(a, b) {
+  return String(a).localeCompare(String(b));
+}
+
+/** @param {GraphId} id */
+function graphIdSeed(id) {
+  const text = String(id);
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index++) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+/** @param {number} seed @param {number} nodeCount */
+function seededOffset(seed, nodeCount) {
+  const value = Math.abs(Math.sin(seed * 12.9898) * 43758.5453);
+  const unitOffset = value - Math.floor(value);
+  const slotAngle = TWO_PI / Math.max(1, nodeCount);
+  return unitOffset * Math.min(0.6, slotAngle * 0.35);
 }
 
 export {

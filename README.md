@@ -342,7 +342,7 @@ Navigation updates the URL (space open, list/map switch, memory selection), relo
 Graph API endpoint used by the SPA:
 
 - `GET /api/spaces/:space/graph?limit=<n>`
-- returns minimal payload per node: `id`, `name`, `tier`, `links_to:number[]`, `linked_by:number[]`
+- returns minimal payload per node: `id:string`, `name`, `tier`, `links_to:string[]`, `linked_by:string[]`
 - includes all tiers by default
 - includes truncation metadata (`total_nodes`, `returned_nodes`, `requested_limit`, `applied_limit`, `max_limit`, `truncated`)
 

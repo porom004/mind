@@ -93,6 +93,86 @@ describe('Neural map graph math', () => {
     expect(computeNodeFillOpacity(999)).toBeCloseTo(0.95, 6);
   });
 
+  test('FEAT-NM-001 SC-NM-001 assigns finite tier-ring coordinates for UUID-backed nodes', () => {
+    const centerX = 400;
+    const centerY = 300;
+    const tierRadius = { 1: 120, 2: 220, 3: 320 };
+    const nodes = [
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        tier: 1,
+        name: 'Hot UUID node',
+        links_to: [],
+        linked_by: [],
+      },
+      {
+        id: '22222222-2222-4222-8222-222222222222',
+        tier: 2,
+        name: 'Warm UUID node',
+        links_to: [],
+        linked_by: [],
+      },
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        tier: 3,
+        name: 'Cold UUID node',
+        links_to: [],
+        linked_by: [],
+      },
+    ];
+
+    const positions = layoutGraph(nodes, { centerX, centerY, tierRadius });
+
+    for (const node of nodes) {
+      const point = positions.get(node.id);
+      expect(point).toBeDefined();
+      expect(Number.isFinite(point.x)).toBe(true);
+      expect(Number.isFinite(point.y)).toBe(true);
+
+      const distanceFromCenter = Math.hypot(point.x - centerX, point.y - centerY);
+      expect(distanceFromCenter).toBeGreaterThan(tierRadius[node.tier] - 16);
+      expect(distanceFromCenter).toBeLessThan(tierRadius[node.tier] + 16);
+      expect(Math.hypot(point.x, point.y)).toBeGreaterThan(50);
+    }
+  });
+
+  test('FEAT-NM-001 SC-NM-002 keeps UUID-backed dense tier spacing deterministic', () => {
+    const nodes = Array.from({ length: 40 }, (_, index) => {
+      const suffix = String(index + 1).padStart(12, '0');
+      return {
+        id: `aaaaaaaa-bbbb-4ccc-8ddd-${suffix}`,
+        tier: 2,
+        name: `UUID Node ${index + 1}`,
+        links_to: [],
+        linked_by: [],
+      };
+    });
+
+    const first = layoutGraph(nodes);
+    const second = layoutGraph(nodes);
+
+    for (const node of nodes) {
+      const p1 = first.get(node.id);
+      const p2 = second.get(node.id);
+      expect(p1).toEqual(p2);
+      expect(Number.isFinite(p1.x)).toBe(true);
+      expect(Number.isFinite(p1.y)).toBe(true);
+    }
+
+    const points = nodes.map(node => first.get(node.id)).filter(Boolean);
+    let minDistance = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < points.length; i++) {
+      for (let j = i + 1; j < points.length; j++) {
+        const dx = points[i].x - points[j].x;
+        const dy = points[i].y - points[j].y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < minDistance) minDistance = distance;
+      }
+    }
+
+    expect(minDistance).toBeGreaterThan(6);
+  });
+
   test('builds neighborhood focus from direct incoming/outgoing links', () => {
     const nodes = [
       { id: 1, links_to: [2], linked_by: [3] },
@@ -109,7 +189,7 @@ describe('Neural map graph math', () => {
     expect(Array.from(focus.incidentEdgeKeys).sort()).toEqual(['1->2', '3->1']);
   });
 
-  test('produces deterministic best-effort spacing for dense tier layouts', () => {
+  test('FEAT-NM-001 SC-NM-003 preserves deterministic best-effort spacing for numeric fixture layouts', () => {
     const nodes = Array.from({ length: 40 }, (_, index) => ({
       id: index + 1,
       tier: 2,

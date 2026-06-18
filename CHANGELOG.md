@@ -27,6 +27,12 @@ Example:
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Neural Map layouts for spaces backed by UUID memory IDs so graph nodes
+  stay positioned around tier rings instead of collapsing near the upper-left
+  origin.
+
 ## [1.5.0] - 2026-06-07
 
 ### Added
