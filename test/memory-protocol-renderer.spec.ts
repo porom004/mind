@@ -41,6 +41,10 @@ describe('memory protocol renderer', () => {
     expect(rendered).toMatch(
       /verified root causes, regressions, risk decisions, or durable validation\s+patterns/
     );
+    expect(rendered).toContain('Before creating a durable memory');
+    expect(rendered).toContain('Future utility');
+    expect(rendered).toContain('Evidence');
+    expect(rendered).toContain('Stability');
   });
 
   test('renders concise mind-only memory type decision guidance', () => {

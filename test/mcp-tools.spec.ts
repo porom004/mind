@@ -1012,6 +1012,47 @@ describe('MCP Memory Tools - search parameter in memory_query (Phase 1b)', () =>
   });
 });
 
+describe('MCP Memory Tools - memory_query LIKE fallback (Phase 1b LIKE fix)', () => {
+  test('memory_query LIKE fallback hit: embedded substring not found by FTS5 falls through to LIKE', async () => {
+    store = createTestStore();
+    store.createSpace('projects/mind-mcp-fallback', 'Test', ['test']);
+    await store.addMemory(
+      'projects/mind-mcp-fallback',
+      'test-memory',
+      'something with xyzduablevalueembeddedxyz embedded',
+      {
+        tags: ['test'],
+      }
+    );
+
+    const tools = createMemoryTools(store);
+    const res = await tools.memory_query.handler({
+      space: 'projects/mind-mcp-fallback',
+      search: 'duablevalue',
+    });
+
+    expect(res.search_method).toBe('like');
+    expect(res.memories).toBeDefined();
+    expect(res.memories.length).toBe(1);
+    expect(res.memories[0]?.name).toBe('test-memory');
+  });
+
+  test('memory_query no-hit: nonexistent search term returns empty results without error', async () => {
+    store = createTestStore();
+    store.createSpace('projects/mind-mcp-fallback-no-hit', 'Test', ['test']);
+
+    const tools = createMemoryTools(store);
+    const res = await tools.memory_query.handler({
+      space: 'projects/mind-mcp-fallback-no-hit',
+      search: 'zzznonexistentfallback',
+    });
+
+    expect(res.memories).toBeDefined();
+    expect(res.total).toBe(0);
+    expect(res.memories.length).toBe(0);
+  });
+});
+
 describe('MCP Search Tool Removed (Phase 1b Step 2)', () => {
   test('search tool is not available in MCP tool list', async () => {
     store = createTestStore();

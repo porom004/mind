@@ -27,6 +27,15 @@ Example:
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP `memory_query` LIKE fallback search no longer fails with `no such column: s.name` when FTS5 returns no results.
+- OpenCode automation plugin: reduced session summary noise by ~95%. The plugin now only persists a session summary on `session.deleted` (fires once per session) instead of also on `session.idle` (fires 20-50 times per session), eliminating redundant empty-summary noise.
+
+### Changed
+
+- Memory protocol guidance refined: agents now receive clearer instructions on when to create durable memories (stable decisions, verified root causes, reusable patterns) with a pre-creation checklist distinguishing them from session summaries (routine progress, no new findings).
+
 ## [1.5.1] - 2026-06-18
 
 ### Fixed

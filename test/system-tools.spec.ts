@@ -68,6 +68,10 @@ describe('MCP System Tools', () => {
     expect(rendered).toMatch(
       /verified root causes, regressions, risk decisions, or durable validation\s+patterns/
     );
+    expect(rendered).toContain('Before creating a durable memory');
+    expect(rendered).toContain('Future utility');
+    expect(rendered).toContain('Evidence');
+    expect(rendered).toContain('Stability');
   });
 
   test('system instructions describe session summary flow and decision matrix', () => {

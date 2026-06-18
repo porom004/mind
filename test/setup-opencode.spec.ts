@@ -182,6 +182,8 @@ describe('OpenCode setup integration', () => {
     expect(pluginText).toContain('sessionSummary');
     expect(pluginText).toContain('writer');
     expect(pluginText).toContain('provenance');
+    expect(pluginText).toContain('session.deleted');
+    expect(pluginText).not.toContain('session.idle');
   });
 
   test('plugin exports experimental.chat.system.transform handler', async () => {

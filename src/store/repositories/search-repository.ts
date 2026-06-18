@@ -322,6 +322,7 @@ export function createSearchRepository(
             SELECT m.id, s.name as space_name, m.name, m.content, m.tier, m.pinned,
                    m.created_at, m.updated_at, m.changed_at
             FROM memories m
+            JOIN spaces s ON s.id = m.space_id
             WHERE (m.name LIKE ? OR m.content LIKE ?)
         `;
     const params: any[] = [likePattern, likePattern];

@@ -293,7 +293,7 @@ export const MindAutomationPlugin = async (ctx) => {
           return;
         }
 
-        if (event.type === 'session.deleted' || event.type === 'session.idle') {
+        if (event.type === 'session.deleted') {
           const summary = buildEventNotes(ctx, event, 'Session end summary (prudent)');
           persistSessionSummary(ctx, event, summary, state);
         }

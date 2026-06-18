@@ -666,6 +666,26 @@ describe('MindStore — Search', () => {
     expect(results.length).toBe(0);
   });
 
+  test('LIKE fallback: searchFallback uses LIKE when FTS5 returns nothing for embedded substring', async () => {
+    store = createTestStore();
+    store.createSpace('projects/mind-test-fallback', 'Test', ['test']);
+    await store.addMemory(
+      'projects/mind-test-fallback',
+      'test-memory',
+      'something with xyzduablevalueembeddedxyz embedded',
+      {
+        tags: ['test'],
+      }
+    );
+
+    const result = await store.searchFallback('duablevalue', {
+      space: 'projects/mind-test-fallback',
+    });
+    expect(result.search_method).toBe('like');
+    expect(result.results.length).toBe(1);
+    expect(result.results[0]!.name).toBe('test-memory');
+  });
+
   test('should use deterministic hybrid order when RAG is enabled and FTS has hits', async () => {
     store = createTestStore();
     store.createSpace('test', 'Test', ['test']);

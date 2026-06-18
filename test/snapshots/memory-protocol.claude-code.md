@@ -67,6 +67,17 @@ Persist verified root causes, regressions, risk decisions, or durable validation
 patterns. Don't persist routine validation outcomes unless they change future
 work.
 
+### Before creating a durable memory
+
+Confirm it meets this threshold:
+
+- **Future utility**: Will a future session need this?
+- **Novelty**: Is this new knowledge (not already captured)?
+- **Evidence**: Is it verified (not speculation)?
+- **Stability**: Is it settled (not likely to change soon)?
+
+If any answer is NO, keep it in the checkpoint or session summary instead.
+
 ### Status tags
 
 `status:*` tags are convention-only, not schema-enforced. Use well-normed tags
