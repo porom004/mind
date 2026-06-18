@@ -27,6 +27,8 @@ Example:
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-06-18
+
 ### Fixed
 
 - Fixed Neural Map layouts for spaces backed by UUID memory IDs so graph nodes
