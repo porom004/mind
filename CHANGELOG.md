@@ -27,6 +27,8 @@ Example:
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-06-30
+
 ### Fixed
 
 - MCP `memory_query` LIKE fallback search no longer fails with `no such column: s.name` when FTS5 returns no results.
