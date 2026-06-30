@@ -35,6 +35,7 @@ Example:
 ### Changed
 
 - Memory protocol guidance refined: agents now receive clearer instructions on when to create durable memories (stable decisions, verified root causes, reusable patterns) with a pre-creation checklist distinguishing them from session summaries (routine progress, no new findings).
+- Added living reference taxonomy guidance for project maps, key decisions, known pitfalls, and 30-day maintenance reviews.
 
 ## [1.5.1] - 2026-06-18
 

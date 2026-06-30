@@ -72,6 +72,11 @@ describe('MCP System Tools', () => {
     expect(rendered).toContain('Future utility');
     expect(rendered).toContain('Evidence');
     expect(rendered).toContain('Stability');
+    expect(rendered).toContain('Living reference taxonomy and maintenance');
+    expect(rendered).toContain('ref:key-decisions');
+    expect(rendered).toContain('ref:known-pitfalls');
+    expect(rendered).toContain('30 days');
+    expect(rendered).toContain('project-map');
   });
 
   test('system instructions describe session summary flow and decision matrix', () => {

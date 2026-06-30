@@ -45,6 +45,11 @@ describe('memory protocol renderer', () => {
     expect(rendered).toContain('Future utility');
     expect(rendered).toContain('Evidence');
     expect(rendered).toContain('Stability');
+    expect(rendered).toContain('Living reference taxonomy and maintenance');
+    expect(rendered).toContain('ref:key-decisions');
+    expect(rendered).toContain('ref:known-pitfalls');
+    expect(rendered).toContain('30 days');
+    expect(rendered).toContain('project-map');
   });
 
   test('renders concise mind-only memory type decision guidance', () => {

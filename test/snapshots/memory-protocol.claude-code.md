@@ -102,6 +102,50 @@ conventions, Source memories, Last reviewed, Maintenance notes.
 When current truth changes, use `memory_update` on the living reference and
 link it to source memories. Sessions remain evidence/logs, not canonical truth.
 
+### Living reference taxonomy and maintenance
+
+**7 reference types** (required tags: `type:reference` + one `ref:*` + `status:living`):
+
+| ref tag              | Recommended name        | Purpose                                      |
+| -------------------- | ----------------------- | -------------------------------------------- |
+| `ref:project-map`    | `project-map`           | Entry points, key modules, repo layout       |
+| `ref:architecture`   | `architecture-overview` | Stack, layers, data flow, boundaries         |
+| `ref:domain`         | `domain-model`          | Core entities, business rules, vocabulary    |
+| `ref:workflow`       | `workflow-notes`        | CI/CD, release process, testing conventions  |
+| `ref:style`          | `style-guide`           | Code conventions, naming, formatting         |
+| `ref:key-decisions`  | `key-decisions`         | Cross-cutting architectural decisions        |
+| `ref:known-pitfalls` | `known-pitfalls`        | Recurring gotchas and anti-patterns to avoid |
+
+**Creation triggers** — create a living reference when:
+
+- A project space is created → create `project-map` immediately.
+- 3+ durable memories reference the same subsystem → create or update `architecture-overview`.
+- A decision affects 2+ modules → add it to `key-decisions`.
+- A debugging step or workaround repeats → add it to `known-pitfalls`.
+
+**Update triggers** — update a living reference when:
+
+- A decision is changed or superseded → update `key-decisions`.
+- A new module, convention, or workflow is added → update the relevant reference.
+- A pitfall stops applying → mark it resolved in `known-pitfalls`.
+- After a major refactor or release → review all living references.
+
+**Living reference content format:**
+
+- Purpose — why this reference exists.
+- Current truth — what is true now; this is the canonical part.
+- Key areas/files/concepts — what an agent needs to know.
+- Active conventions — rules currently in force.
+- Source memories — links to durable memories this summarizes.
+- Last reviewed — date in YYYY-MM-DD format.
+- Maintenance notes — how to keep this updated.
+
+**Living reference vs durable memory:** durable memories capture events (decisions, fixes, discoveries); living references capture state (the current truth map). When truth changes, update the living reference and link new durable memories as sources.
+
+**Anti-staleness:** Review every living reference at least every 30 days. If unchanged, update `Last reviewed`. If truth changed, update `Current truth` and link new source memories.
+
+**Granularity minimum:** Every project space should have at least a `ref:project-map`. Create higher-level references only when they serve future sessions.
+
 ### Cautious deletion
 
 Use `memory_delete` only when a memory is clearly obsolete, no longer
